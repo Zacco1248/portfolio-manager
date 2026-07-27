@@ -2,6 +2,7 @@ import { config } from '../config.js';
 import { earliestTransactionDate, refreshAllBenchmarks, BENCHMARKS } from '../services/analytics.js';
 import { writeDailySnapshot } from '../services/snapshots.js';
 import { evaluateAlerts } from '../services/alerts.js';
+import { refreshDividendHistory } from '../services/corporate-actions.js';
 import { analyzePendingNews, fetchNews } from '../services/news.js';
 import { refreshFxRates } from '../services/fx.js';
 import { instrumentsNeedingPrices, isMarketHours, refreshQuotes } from '../services/prices.js';
@@ -40,4 +41,7 @@ export function registerDataJobs(schedule: ScheduleFn): void {
 
   // Alerty sprawdzamy częściej niż newsy, ale rzadziej niż ceny.
   schedule('alerts:check', '*/15 * * * *', config.cron.alerts, async () => evaluateAlerts());
+
+  // Zdarzenia korporacyjne zmieniają się rzadko — raz na dobę wystarczy.
+  schedule('dividends:history', '40 23 * * *', config.cron.snapshot, async () => refreshDividendHistory());
 }

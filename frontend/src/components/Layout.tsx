@@ -8,6 +8,7 @@ const NAV = [
   { to: '/', label: 'Pulpit', end: true },
   { to: '/pozycje', label: 'Pozycje' },
   { to: '/transakcje', label: 'Transakcje' },
+  { to: '/analiza', label: 'Analiza' },
   { to: '/rebalans', label: 'Rebalans' },
   { to: '/dywidendy', label: 'Dywidendy' },
   { to: '/obligacje', label: 'Obligacje' },
@@ -16,6 +17,7 @@ const NAV = [
   { to: '/import', label: 'Import' },
   { to: '/podatki', label: 'Podatki' },
   { to: '/ustawienia', label: 'Ustawienia' },
+  { to: '/pomoc', label: 'Pomoc' },
 ];
 
 export function Layout() {

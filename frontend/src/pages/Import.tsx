@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import type { ImportPreviewResponse, ImportRowPreview } from '@portfolio/shared';
+import { MappingWizard } from '@/components/MappingWizard';
+import type { InspectResult } from '@/components/MappingWizard';
 import { Card, DataTable, ErrorBanner, Field, Spinner, Toast, useToast } from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
 import { formatDate } from '@/lib/format';
@@ -30,18 +32,48 @@ export function ImportPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [inspect, setInspect] = useState<InspectResult | null>(null);
   const { toast, show, dismiss } = useToast();
 
-  const runPreview = async () => {
+  /**
+   * Dla plików CSV najpierw pokazujemy kreator mapowania — bez wskazania,
+   * która kolumna jest datą, a która rodzajem operacji, parser generyczny
+   * nie ma z czym pracować.
+   */
+  const needsWizard = (): boolean => {
+    if (!file) return false;
+    if (parserId && parserId !== 'generic-csv') return false;
+    return /\.(csv|tsv|txt)$/i.test(file.name);
+  };
+
+  const startImport = async () => {
+    if (!file || !portfolioId) return;
+    if (needsWizard() && !inspect) {
+      setBusy(true);
+      setError(null);
+      try {
+        setInspect(await api.imports.inspect(file));
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : 'Nie udało się odczytać nagłówków pliku');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    await runPreview();
+  };
+
+  const runPreview = async (mapping?: Record<string, string | null>) => {
     if (!file || !portfolioId) return;
     setBusy(true);
     setError(null);
     try {
-      const result = await api.imports.preview(file, portfolioId, parserId || undefined);
+      const result = await api.imports.preview(file, portfolioId, parserId || undefined, mapping);
       setPreview(result);
       // Domyślnie zaznaczamy wyłącznie wiersze bezsporne — duplikaty
       // i konflikty wymagają świadomej decyzji użytkownika.
       setSelected(new Set(result.rows.filter((r) => r.status === 'new').map((r) => r.rowId)));
+      setInspect(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Nie udało się odczytać pliku');
     } finally {
@@ -114,11 +146,11 @@ export function ImportPage() {
         </div>
 
         <div className="flex items-center gap-2 px-4 pb-4">
-          <button type="button" className="btn btn-primary" onClick={() => void runPreview()} disabled={!file || !portfolioId || busy}>
-            {busy ? 'Analizuję…' : 'Pokaż podgląd'}
+          <button type="button" className="btn btn-primary" onClick={() => void startImport()} disabled={!file || !portfolioId || busy}>
+            {busy ? 'Analizuję…' : needsWizard() && !inspect ? 'Dalej: mapowanie kolumn' : 'Pokaż podgląd'}
           </button>
-          {preview && (
-            <button type="button" className="btn" onClick={() => { setPreview(null); setFile(null); }}>
+          {(preview || inspect) && (
+            <button type="button" className="btn" onClick={() => { setPreview(null); setInspect(null); setFile(null); }}>
               Wyczyść
             </button>
           )}
@@ -136,7 +168,21 @@ export function ImportPage() {
       </Card>
 
       {error && <ErrorBanner message={error} />}
-      {busy && !preview && <Spinner label="Czytam plik…" />}
+
+      {inspect && (
+        <Card title="Mapowanie kolumn">
+          <div className="p-4 pt-2">
+            <MappingWizard
+              inspect={inspect}
+              busy={busy}
+              onCancel={() => setInspect(null)}
+              onApply={(mapping) => void runPreview(mapping)}
+            />
+          </div>
+        </Card>
+      )}
+
+      {busy && !preview && !inspect && <Spinner label="Czytam plik…" />}
 
       {preview && (
         <Card

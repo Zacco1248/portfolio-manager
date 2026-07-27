@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ASSET_CLASS_LABELS } from '@portfolio/shared';
 import type { AssetClass } from '@portfolio/shared';
-import { Card, ErrorBanner, Spinner } from '@/components/ui';
+import { CandlestickChart } from '@/components/CandlestickChart';
+import { Card, DataTable, ErrorBanner, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
@@ -18,6 +19,8 @@ export function InstrumentDetail() {
   const { id } = useParams();
   const instrumentId = Number(id);
   const { data, error, loading, reload } = useAsync(() => api.analytics.technical(instrumentId), [instrumentId]);
+  const dividends = useAsync(() => api.corporate.dividendHistory(instrumentId), [instrumentId]);
+  const [chartMode, setChartMode] = useState<'candles' | 'line'>('candles');
 
   const series = useMemo(() => {
     if (!data) return [];
@@ -64,11 +67,37 @@ export function InstrumentDetail() {
         <StatTile label="Sygnałów" value={String(signals.length)} tone="neutral" />
       </div>
 
-      <Card title="Notowania i średnie kroczące">
+      <Card
+        title="Notowania i średnie kroczące"
+        action={
+          <div className="flex gap-1">
+            <button
+              type="button"
+              className={`badge border ${chartMode === 'candles' ? 'border-accent bg-accent/15 text-accent' : 'border-surface-border text-content-muted'}`}
+              onClick={() => setChartMode('candles')}
+            >
+              świece
+            </button>
+            <button
+              type="button"
+              className={`badge border ${chartMode === 'line' ? 'border-accent bg-accent/15 text-accent' : 'border-surface-border text-content-muted'}`}
+              onClick={() => setChartMode('line')}
+            >
+              linia
+            </button>
+          </div>
+        }
+      >
         {series.length < 2 ? (
           <p className="px-4 pb-4 pt-2 text-sm text-content-muted">
             Za mało danych. Kliknij „Uzupełnij historię notowań”, żeby pobrać przebieg z ostatnich lat.
           </p>
+        ) : chartMode === 'candles' ? (
+          <CandlestickChart
+            candles={data.candles}
+            sma50={data.indicators.sma50}
+            sma200={data.indicators.sma200}
+          />
         ) : (
           <div className="h-72 px-2 pb-2 pt-3">
             <ResponsiveContainer width="100%" height="100%">
@@ -124,6 +153,27 @@ export function InstrumentDetail() {
         <p className="px-4 pb-3 pt-1 text-2xs text-content-muted">
           Lista zdarzeń technicznych ma charakter informacyjny. Nie stanowi rekomendacji ani doradztwa inwestycyjnego.
         </p>
+      </Card>
+
+      <Card title="Historia wypłat dywidend">
+        {!dividends.data || dividends.data.length === 0 ? (
+          <p className="px-4 pb-4 pt-2 text-sm text-content-muted">
+            Brak zapisanych wypłat. Pobierz je przyciskiem „Odśwież dane dywidendowe” w Ustawieniach.
+          </p>
+        ) : (
+          <div className="max-h-64 overflow-y-auto">
+            <DataTable headers={['Dzień ustalenia prawa', { label: 'Kwota na akcję', align: 'right' }]}>
+              {dividends.data.map((entry) => (
+                <tr key={entry.exDate}>
+                  <td className="table-cell tabular">{formatDate(entry.exDate)}</td>
+                  <td className="table-cell tabular text-right">
+                    {(entry.amountE8 / 1e8).toFixed(4)} {entry.currency}
+                  </td>
+                </tr>
+              ))}
+            </DataTable>
+          </div>
+        )}
       </Card>
     </div>
   );

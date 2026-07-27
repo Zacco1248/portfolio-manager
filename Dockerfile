@@ -90,7 +90,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh \
  && mkdir -p /app/data \
  && chown -R node:node /app
 
-USER node
+# Kontener startuje jako root wyłącznie po to, żeby entrypoint mógł naprawić
+# właściciela zamontowanego katalogu danych — bind mount z hosta przykrywa
+# uprawnienia ustawione podczas budowania. Sama aplikacja działa jako `node`;
+# zrzucenie uprawnień robi entrypoint przez setpriv.
 VOLUME ["/app/data"]
 EXPOSE 8080
 

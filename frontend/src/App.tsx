@@ -2,9 +2,11 @@ import { Route, Routes } from 'react-router-dom';
 import { Layout } from '@/components/Layout';
 import { Spinner } from '@/components/ui';
 import { Alerts } from '@/pages/Alerts';
+import { Analysis } from '@/pages/Analysis';
 import { Bonds } from '@/pages/Bonds';
 import { Dashboard } from '@/pages/Dashboard';
 import { Dividends } from '@/pages/Dividends';
+import { Help } from '@/pages/Help';
 import { ImportPage } from '@/pages/Import';
 import { InstrumentDetail } from '@/pages/InstrumentDetail';
 import { Login } from '@/pages/Login';
@@ -31,6 +33,7 @@ export function App() {
         <Route path="pozycje" element={<Positions />} />
         <Route path="transakcje" element={<Transactions />} />
         <Route path="instrument/:id" element={<InstrumentDetail />} />
+        <Route path="analiza" element={<Analysis />} />
         <Route path="rebalans" element={<Rebalance />} />
         <Route path="dywidendy" element={<Dividends />} />
         <Route path="obligacje" element={<Bonds />} />
@@ -39,6 +42,7 @@ export function App() {
         <Route path="import" element={<ImportPage />} />
         <Route path="podatki" element={<Tax />} />
         <Route path="ustawienia" element={<Settings />} />
+        <Route path="pomoc" element={<Help />} />
         <Route path="*" element={<Dashboard />} />
       </Route>
     </Routes>

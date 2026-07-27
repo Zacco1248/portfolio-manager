@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AiDisclaimer, Card, EmptyState, ErrorBanner, Spinner, Toast, useToast } from '@/components/ui';
+import { AiDisclaimer, Card, EmptyState, ErrorBanner, Field, Spinner, Toast, useToast } from '@/components/ui';
 import { api } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
@@ -28,6 +28,9 @@ export function News() {
     () => api.news.list({ importance: importance || undefined, sentiment: sentiment || undefined }),
     [importance, sentiment],
   );
+  const watchlist = useAsync(() => api.news.watchlist(), []);
+  const instruments = useAsync(() => api.instruments.list(), []);
+  const [watchPick, setWatchPick] = useState('');
 
   const refresh = async () => {
     setBusy(true);
@@ -68,6 +71,68 @@ export function News() {
           po włączeniu analizy.
         </p>
       )}
+
+      <Card
+        title="Obserwowane spółki"
+        action={
+          <span className="text-2xs text-content-muted">
+            Spółki z portfela są monitorowane automatycznie — tutaj dodajesz pozostałe.
+          </span>
+        }
+      >
+        <div className="flex flex-wrap items-end gap-2 p-4 pt-2">
+          <div className="w-64">
+            <Field label="Dodaj instrument">
+              <select className="input" value={watchPick} onChange={(e) => setWatchPick(e.target.value)}>
+                <option value="">— wybierz —</option>
+                {(instruments.data ?? [])
+                  .filter((i) => i.assetClass !== 'cash')
+                  .map((instrument) => (
+                    <option key={instrument.id} value={instrument.id}>
+                      {instrument.symbol} · {instrument.name}
+                    </option>
+                  ))}
+              </select>
+            </Field>
+          </div>
+          <button
+            type="button"
+            className="btn"
+            disabled={!watchPick}
+            onClick={() =>
+              void api.news
+                .watch(Number(watchPick))
+                .then(() => {
+                  setWatchPick('');
+                  watchlist.reload();
+                  show('Dodano do obserwowanych', 'success');
+                })
+                .catch(() => show('Nie udało się dodać', 'error'))
+            }
+          >
+            Obserwuj
+          </button>
+        </div>
+
+        {watchlist.data && watchlist.data.length > 0 && (
+          <ul className="flex flex-wrap gap-2 border-t border-surface-border px-4 py-3">
+            {watchlist.data.map((instrument) => (
+              <li key={instrument.id} className="flex items-center gap-1.5 rounded bg-surface-overlay px-2 py-1 text-2xs">
+                <span className="font-medium">{instrument.symbol}</span>
+                <span className="text-content-muted">{instrument.name}</span>
+                <button
+                  type="button"
+                  className="text-content-muted hover:text-loss"
+                  aria-label={`Przestań obserwować ${instrument.symbol}`}
+                  onClick={() => void api.news.unwatch(instrument.id).then(watchlist.reload)}
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
 
       {news.loading && <Spinner />}
       {news.error && <ErrorBanner message={news.error} onRetry={news.reload} />}

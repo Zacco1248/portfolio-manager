@@ -43,6 +43,17 @@ Aplikacja jest dostępna pod `http://<adres-serwera>:8080`. Zaloguj się hasłem
 
 Kontener nie wystartuje, jeśli `APP_PASSWORD` albo `SESSION_SECRET` zostały z domyślnymi wartościami — to celowe zabezpieczenie przed uruchomieniem z hasłem z przykładu.
 
+Jeśli port nie odpowiada mimo działającego kontenera, sprawdź firewall na serwerze:
+
+```bash
+docker compose ps          # czy stan to Up, czy Exited
+docker compose logs --tail 40
+sudo ufw status
+sudo ufw allow in on tailscale0 to any port 8080
+```
+
+Po zalogowaniu zajrzyj do zakładki **Pomoc** — wyjaśnia model danych i decyzje, które inaczej bywają zaskoczeniem.
+
 ---
 
 ## Konfiguracja
@@ -77,9 +88,9 @@ Pozostałe zmienne sterują portem, częstotliwością odświeżania cen, godzin
 
 **Analiza**
 - Pulpit: wartość portfela, zmiana dzienna i tygodniowa, wynik vs wpłacony kapitał, wykres wartości w czasie, alokacja wg klas aktywów, walut, sektorów i geografii.
-- XIRR całego portfela i per pozycja, porównanie z benchmarkami.
-- Analiza techniczna per instrument: SMA 50/200, EMA, RSI, MACD, wykrywanie złotego krzyża i stref wykupienia.
-- Dywidendy: historia, podsumowanie roczne, stopa dywidendy z ostatnich 12 miesięcy.
+- Widok Analiza: XIRR całego portfela i per pozycja, wykres portfela na tle benchmarków znormalizowany do 100.
+- Analiza techniczna per instrument: wykres świecowy, SMA 50/200, EMA, RSI, MACD, wykrywanie złotego krzyża i stref wykupienia.
+- Dywidendy: historia, podsumowanie roczne, stopa dywidendy z ostatnich 12 miesięcy, kalendarz przewidywanych wypłat.
 
 **Rebalans i kontrola ryzyka**
 - Alokacja docelowa per klasa aktywów z tolerancją odchylenia.
@@ -93,7 +104,8 @@ Pozostałe zmienne sterują portem, częstotliwością odświeżania cen, godzin
 - Okresy bez ogłoszonego odczytu inflacji są oznaczone jako prognoza.
 
 **Monitoring i powiadomienia**
-- Newsy z publicznych kanałów RSS dla spółek z portfela i watchlisty.
+- Newsy z publicznych kanałów RSS dla spółek z portfela i ręcznie dodanej watchlisty.
+- Terminy raportów okresowych wprowadzane ręcznie, z przypomnieniem przed datą.
 - Opcjonalna analiza AI: streszczenie po polsku, sentyment, waga, argumenty za trzymaniem i za redukcją.
 - Alerty: cenowe, duża zmiana dzienna, odchylenie alokacji, zbliżający się raport okresowy, istotny news.
 
@@ -159,6 +171,7 @@ Powód jest praktyczny: `2.2301 * 1e8` w arytmetyce zmiennoprzecinkowej daje `22
 | Dane | Źródło | Klucz API |
 |---|---|---|
 | Akcje, ETF-y (GPW przez sufiks `.WA`), indeksy, metale | Yahoo Finance (nieoficjalne API) | nie |
+| Historia dywidend i splitów | Yahoo Finance (`events=div,split`) | nie |
 | Kryptowaluty | CoinGecko | nie |
 | Kursy walut | NBP, tabela A | nie |
 | Cena złota | NBP (PLN za gram) | nie |
@@ -169,7 +182,16 @@ Powód jest praktyczny: `2.2301 * 1e8` w arytmetyce zmiennoprzecinkowej daje `22
 
 Yahoo Finance to nieoficjalne API, które może się zmienić bez zapowiedzi. Dlatego dostawcy cen mają wspólny interfejs z łańcuchem fallbacku, cache w bazie i wyłącznik obwodu: po pięciu błędach z rzędu źródło jest wyłączane na 30 minut. Brak ceny nigdy nie wywraca aplikacji — pozycja jest wyceniana ostatnią znaną ceną i oznaczana jako nieświeża.
 
-Jako benchmark GPW używany jest **WIG20**, nie szeroki WIG — Yahoo nie publikuje tego drugiego.
+**Benchmarki GPW opierają się na ETF-ach, nie na indeksach.** Yahoo oddaje dla indeksów WIG20 i mWIG40
+wyłącznie bieżącą wartość, bez serii historycznej — do wykresu porównawczego się nie nadają. Zamiast nich
+używane są notowania funduszy Beta ETF WIG20TR i mWIG40TR, co ma dodatkową zaletę: warianty *total return*
+uwzględniają dywidendy, więc porównanie z portfelem, który je otrzymuje, jest uczciwsze niż z indeksem
+cenowym. Etykiety w interfejsie mówią wprost, co jest źródłem. Szeroki indeks WIG nie jest dostępny w żadnej
+z tych postaci.
+
+Moduł `quoteSummary` Yahoo — zawierający przyszłe terminy dywidend i składy funduszy — wymaga tokenu
+sesyjnego (crumb), a endpoint `v7/quote` zwraca wprost komunikat o braku dostępu. Nie obchodzimy tych
+ograniczeń: terminy wypłat są prognozowane z historii, a skład ETF-ów wprowadza użytkownik.
 
 ---
 
@@ -260,7 +282,9 @@ Rzeczy, o których warto wiedzieć przed użyciem:
 
 - **Yahoo Finance i CoinGecko to nieoficjalne API.** Mogą przestać działać bez zapowiedzi. Cache w bazie sprawia, że aplikacja nadal działa, ale wyceny się zestarzeją.
 - **Waluta notowania w imporcie XTB jest wnioskowana** z sufiksu symbolu. Dla `.UK` domyślnie przyjmowany jest USD; jeśli trzymasz brytyjskie akcje notowane w GBP, sprawdź walutę na instrumencie po imporcie.
-- **Wykrywanie nakładania się ETF-ów wymaga uzupełnienia składu funduszu** na instrumencie. Bez tych danych aplikacja milczy, zamiast zgadywać skład po nazwie.
+- **Kalendarz dywidend podaje terminy prognozowane**, wyliczone z rytmu poprzednich wypłat — darmowe źródła nie udostępniają przyszłych dat ustalenia prawa. Interfejs oznacza je jako prognozę.
+- **Terminy raportów okresowych wprowadzasz ręcznie.** Nie ma darmowego API z harmonogramami, a scraping stron spółek psułby się przy każdej zmianie layoutu.
+- **Wykrywanie nakładania się ETF-ów wymaga uzupełnienia składu funduszu** — wklejasz go ze strony emitenta w Ustawieniach. Bez tych danych aplikacja milczy, zamiast zgadywać skład po nazwie.
 - **Raport podatkowy nie obsługuje rozliczania strat z lat ubiegłych** ani sytuacji nietypowych (splity z wypłatą gotówki, transfery między brokerami, spin-offy).
 - **Sygnały techniczne i analiza AI są materiałem informacyjnym**, nie rekomendacją ani doradztwem inwestycyjnym.
 - **Aplikacja zakłada jednego użytkownika.** Nie ma ról, uprawnień ani audytu dostępu.

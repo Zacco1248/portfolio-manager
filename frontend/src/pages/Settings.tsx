@@ -194,8 +194,17 @@ export function Settings() {
           <button type="button" className="btn" onClick={() => void api.analytics.refreshBenchmarks().then(() => show('Benchmarki odświeżone', 'success'))}>
             Odśwież benchmarki
           </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void api.corporate.refresh().then((r) => show(r.message, 'success'))}
+          >
+            Odśwież dane dywidendowe
+          </button>
         </div>
       </Card>
+
+      <EtfHoldingsEditor onMessage={show} />
 
       <Card title="Stan systemu" action={<button type="button" className="btn btn-ghost text-2xs" onClick={() => void refreshStatus()}>Odśwież</button>}>
         {status && (
@@ -285,5 +294,113 @@ function Info({ label, value }: { label: string; value: string }) {
       <dt className="text-2xs uppercase tracking-wide text-content-muted">{label}</dt>
       <dd className="mt-0.5">{value}</dd>
     </div>
+  );
+}
+
+
+/**
+ * Skład ETF-ów wprowadzany ręcznie.
+ *
+ * Emitenci publikują listy pozycji na swoich stronach, ale każdy w innym
+ * formacie i bez otwartego API. Przyjmujemy wklejony tekst i wyciągamy z niego
+ * pary ticker + waga — to wystarcza do wykrycia nakładania się funduszy.
+ */
+function EtfHoldingsEditor({ onMessage }: { onMessage: (message: string, tone: 'info' | 'error' | 'success') => void }) {
+  const missing = useAsync(() => api.corporate.missingHoldings(), []);
+  const instruments = useAsync(() => api.instruments.list(), []);
+  const [selected, setSelected] = useState('');
+  const [text, setText] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const current = useAsync(
+    () => (selected ? api.corporate.holdings(Number(selected)) : Promise.resolve([])),
+    [selected],
+  );
+
+  const etfs = (instruments.data ?? []).filter((i) => i.assetClass === 'etf');
+
+  const save = async () => {
+    if (!selected) return;
+    setSaving(true);
+    try {
+      const result = await api.corporate.saveHoldings(Number(selected), text);
+      setText('');
+      current.reload();
+      missing.reload();
+      onMessage(`Zapisano ${result.saved} pozycji składu`, 'success');
+    } catch {
+      onMessage('Nie udało się zapisać składu', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card
+      title="Skład ETF-ów"
+      action={
+        missing.data && missing.data.length > 0 ? (
+          <span className="text-2xs text-warn">Bez składu: {missing.data.map((e) => e.symbol).join(', ')}</span>
+        ) : null
+      }
+    >
+      {etfs.length === 0 ? (
+        <p className="px-4 pb-4 pt-2 text-sm text-content-muted">
+          Nie masz jeszcze instrumentów oznaczonych jako ETF. Klasę aktywów zmienisz na stronie instrumentu.
+        </p>
+      ) : (
+        <>
+          <div className="grid gap-3 p-4 pt-2 sm:grid-cols-3">
+            <Field label="Fundusz">
+              <select className="input" value={selected} onChange={(e) => setSelected(e.target.value)}>
+                <option value="">— wybierz —</option>
+                {etfs.map((etf) => (
+                  <option key={etf.id} value={etf.id}>
+                    {etf.symbol} · {etf.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <div className="sm:col-span-2">
+              <Field
+                label="Wklej skład"
+                hint="Jedna pozycja w wierszu: ticker i waga w procentach. Wklej wprost ze strony emitenta albo z pliku CSV."
+              >
+                <textarea
+                  className="input h-24 font-mono text-2xs"
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder={'AAPL 7,12\nMSFT 6,45\nNVDA 5,90'}
+                  disabled={!selected}
+                />
+              </Field>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 px-4 pb-4">
+            <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={!selected || !text || saving}>
+              {saving ? 'Zapisuję…' : 'Zapisz skład'}
+            </button>
+            {current.data && current.data.length > 0 && (
+              <span className="text-2xs text-content-muted">
+                Zapisanych pozycji: {current.data.length}, największa waga{' '}
+                {(current.data[0]!.weightBp / 100).toFixed(2)}%
+              </span>
+            )}
+          </div>
+
+          {current.data && current.data.length > 0 && (
+            <ul className="flex flex-wrap gap-2 border-t border-surface-border px-4 py-3 text-2xs">
+              {current.data.slice(0, 25).map((holding) => (
+                <li key={holding.symbol} className="rounded bg-surface-overlay px-2 py-1">
+                  {holding.symbol} {(holding.weightBp / 100).toFixed(2)}%
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </Card>
   );
 }

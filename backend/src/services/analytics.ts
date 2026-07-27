@@ -4,7 +4,7 @@ import type { AnalyticsResponse, BenchmarkSeries, XirrResult } from '@portfolio/
 import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { benchmarkSeries, instruments, transactions } from '../db/schema.js';
-import { addDays, today } from '../lib/dates.js';
+import { addDays, minDate, today } from '../lib/dates.js';
 import type { IsoDate } from '../lib/dates.js';
 import { errorMessage } from '../lib/errors.js';
 import { createLogger } from '../lib/logger.js';
@@ -17,14 +17,20 @@ import type { Cashflow } from './xirr.js';
 const log = createLogger('analytics');
 
 /**
- * Benchmarki. WIG nie jest dostępny w API Yahoo — używamy WIG20, który jest
- * jedynym indeksem GPW, jaki to źródło publikuje. Nazwę pokazujemy wprost,
- * żeby porównanie nie sugerowało czegoś innego niż jest.
+ * Benchmarki.
+ *
+ * Dla indeksów GPW dostawca oddaje wyłącznie bieżącą wartość, bez serii
+ * historycznej — do wykresu porównawczego się nie nadają. Zamiast nich
+ * używamy notowań ETF-ów odwzorowujących te indeksy, co ma dodatkową zaletę:
+ * warianty total return uwzględniają dywidendy, więc porównanie z portfelem,
+ * który je otrzymuje, jest uczciwe. Etykiety mówią wprost, co jest źródłem.
+ *
+ * Szeroki indeks WIG nie jest dostępny w żadnej z tych postaci.
  */
 export const BENCHMARKS: Record<string, { symbol: string; label: string; currency: string }> = {
-  WIG20: { symbol: 'WIG20.WA', label: 'WIG20', currency: 'PLN' },
+  WIG20TR: { symbol: 'ETFBW20TR.WA', label: 'WIG20TR (ETF Beta)', currency: 'PLN' },
   SP500: { symbol: '^GSPC', label: 'S&P 500', currency: 'USD' },
-  MWIG40: { symbol: 'MWIG40.WA', label: 'mWIG40', currency: 'PLN' },
+  MWIG40TR: { symbol: 'ETFBM40TR.WA', label: 'mWIG40TR (ETF Beta)', currency: 'PLN' },
   NASDAQ: { symbol: '^IXIC', label: 'NASDAQ Composite', currency: 'USD' },
   MSCI_WORLD: { symbol: 'URTH', label: 'MSCI World (ETF URTH)', currency: 'USD' },
 };
@@ -205,12 +211,17 @@ export function benchmarkSeriesFor(keys: string[], from: IsoDate, to: IsoDate): 
 export function buildAnalytics(portfolioIds: number[], from?: IsoDate, to?: IsoDate, benchmarks?: string[]): AnalyticsResponse {
   const end = to ?? today(config.timezone);
   const history = readHistory(portfolioIds, from, end);
-  const start = from ?? history[0]?.date ?? addDays(end, -365);
+
+  // Okno porównania wyznacza pierwsza transakcja, a nie pierwszy snapshot.
+  // Snapshoty zaczynają się dopiero od uruchomienia aplikacji, więc oparcie
+  // się na nich zwęziłoby zakres benchmarków do jednego dnia.
+  const start =
+    from ?? (history.length > 1 ? history[0]!.date : minDate(earliestTransactionDate(), addDays(end, -365)));
 
   return {
     portfolioXirr: portfolioXirr(portfolioIds),
     positionXirr: positionXirr(portfolioIds),
-    benchmarks: benchmarkSeriesFor(benchmarks ?? ['WIG20', 'SP500'], start, end),
+    benchmarks: benchmarkSeriesFor(benchmarks ?? ['WIG20TR', 'SP500'], start, end),
     portfolioIndexed: normalize(history.map((h) => ({ date: h.date, value: h.valuePlnMinor }))),
   };
 }

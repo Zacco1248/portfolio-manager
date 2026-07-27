@@ -44,12 +44,15 @@ export function Dashboard() {
         title="Portfel jest pusty"
         description="Zaimportuj wyciąg z brokera albo dodaj pierwszą transakcję ręcznie."
         action={
-          <div className="mt-2 flex gap-2">
+          <div className="mt-2 flex flex-wrap justify-center gap-2">
             <Link className="btn btn-primary" to="/import">
               Importuj plik
             </Link>
             <Link className="btn" to="/transakcje">
               Dodaj transakcję
+            </Link>
+            <Link className="btn btn-ghost" to="/pomoc">
+              Jak to działa?
             </Link>
           </div>
         }

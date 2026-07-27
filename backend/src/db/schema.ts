@@ -390,6 +390,27 @@ export const newsItems = sqliteTable(
   ],
 );
 
+/**
+ * Historia zdarzeń korporacyjnych pobrana od dostawcy cen: wypłaty dywidend
+ * i splity. Służy do zbudowania kalendarza dywidend i do wykrycia splitu,
+ * którego użytkownik nie wprowadził ręcznie.
+ */
+export const dividendEvents = sqliteTable(
+  'dividend_events',
+  {
+    instrumentId: integer('instrument_id')
+      .notNull()
+      .references(() => instruments.id, { onDelete: 'cascade' }),
+    /** Dzień ustalenia prawa do dywidendy (ex-date). */
+    exDate: text('ex_date').notNull(),
+    amountE8: integer('amount_e8').notNull(),
+    currency: text('currency').notNull(),
+    source: text('source').notNull(),
+    fetchedAt: text('fetched_at').notNull().default(now),
+  },
+  (t) => [primaryKey({ columns: [t.instrumentId, t.exDate] })],
+);
+
 /** Terminy raportów okresowych — do przypomnień. */
 export const reportDates = sqliteTable(
   'report_dates',
@@ -400,7 +421,9 @@ export const reportDates = sqliteTable(
       .references(() => instruments.id, { onDelete: 'cascade' }),
     date: text('date').notNull(),
     label: text('label').notNull(),
+    /** manual | provider — skąd wzięliśmy termin. Zawsze ustawiane wprost w kodzie. */
     source: text('source'),
+    note: text('note'),
   },
   (t) => [uniqueIndex('report_dates_uq').on(t.instrumentId, t.date, t.label)],
 );
@@ -556,3 +579,5 @@ export type NewsItemRow = typeof newsItems.$inferSelect;
 export type AlertRow = typeof alerts.$inferSelect;
 export type AlertEventRow = typeof alertEvents.$inferSelect;
 export type ImportBatchRow = typeof importBatches.$inferSelect;
+export type DividendEventRow = typeof dividendEvents.$inferSelect;
+export type ReportDateRow = typeof reportDates.$inferSelect;

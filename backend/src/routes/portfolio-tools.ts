@@ -19,6 +19,17 @@ import { alerts, instruments } from '../db/schema.js';
 import { notFound } from '../lib/errors.js';
 import { asyncHandler } from '../lib/http.js';
 import { evaluateAlerts, recentAlertEvents } from '../services/alerts.js';
+import {
+  addReportDate,
+  deleteReportDate,
+  dividendHistory,
+  etfsMissingHoldings,
+  getHoldings,
+  listReportDates,
+  parseHoldingsText,
+  refreshDividendHistory,
+  setHoldings,
+} from '../services/corporate-actions.js';
 import { createBond, deleteBond, listBonds, listCpi, upsertCpi } from '../services/bonds.js';
 import {
   addToWatchlist,
@@ -306,3 +317,71 @@ toolsRouter.post(
     res.json(await testTelegram());
   }),
 );
+
+// ── Zdarzenia korporacyjne ───────────────────────────────────
+toolsRouter.post(
+  '/corporate-actions/refresh',
+  asyncHandler(async (_req, res) => {
+    res.json({ ok: true, message: await refreshDividendHistory() });
+  }),
+);
+
+toolsRouter.get('/corporate-actions/dividends/:instrumentId', (req, res, next) => {
+  const id = idParam.safeParse(req.params.instrumentId);
+  if (!id.success) return next(id.error);
+  res.json(dividendHistory(id.data));
+});
+
+// ── Terminy raportów okresowych ──────────────────────────────
+toolsRouter.get('/report-dates', (_req, res) => {
+  res.json(listReportDates());
+});
+
+toolsRouter.post('/report-dates', (req, res, next) => {
+  const parsed = z
+    .object({
+      instrumentId: idParam,
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      label: z.string().trim().min(1).max(120),
+      note: z.string().trim().max(300).optional(),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) return next(parsed.error);
+  res.status(201).json(addReportDate(parsed.data));
+});
+
+toolsRouter.delete('/report-dates/:id', (req, res, next) => {
+  const id = idParam.safeParse(req.params.id);
+  if (!id.success) return next(id.error);
+  deleteReportDate(id.data);
+  res.json({ ok: true });
+});
+
+// ── Skład ETF-ów ─────────────────────────────────────────────
+toolsRouter.get('/holdings/missing', (_req, res) => {
+  res.json(etfsMissingHoldings());
+});
+
+toolsRouter.get('/holdings/:instrumentId', (req, res, next) => {
+  const id = idParam.safeParse(req.params.instrumentId);
+  if (!id.success) return next(id.error);
+  res.json(getHoldings(id.data));
+});
+
+toolsRouter.put('/holdings/:instrumentId', (req, res, next) => {
+  const id = idParam.safeParse(req.params.instrumentId);
+  if (!id.success) return next(id.error);
+
+  const parsed = z
+    .object({
+      // Skład da się podać jako listę albo jako wklejony tekst ze strony emitenta.
+      holdings: z.array(z.object({ symbol: z.string(), weightPercent: z.union([z.string(), z.number()]) })).optional(),
+      text: z.string().optional(),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) return next(parsed.error);
+
+  const entries = parsed.data.holdings ?? (parsed.data.text ? parseHoldingsText(parsed.data.text) : []);
+  const saved = setHoldings(id.data, entries);
+  res.json({ ok: true, saved, holdings: getHoldings(id.data) });
+});

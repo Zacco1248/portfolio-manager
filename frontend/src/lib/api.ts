@@ -194,6 +194,14 @@ export const api = {
     },
     commit: (batchId: number, acceptedRowIds: string[]) =>
       post<ImportCommitResponse>('/imports/commit', { batchId, acceptedRowIds }),
+    inspect: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return request<import('@/components/MappingWizard').InspectResult>('/imports/inspect', {
+        method: 'POST',
+        body: form,
+      });
+    },
     batches: () =>
       get<{ id: number; parserId: string; filename: string; status: string; createdAt: string }[]>(
         '/imports/batches',
@@ -210,6 +218,29 @@ export const api = {
     get: () => get<Record<string, unknown>>('/settings'),
     update: (body: Record<string, unknown>) => patch<Record<string, unknown>>('/settings', body),
     testTelegram: () => post<{ ok: boolean; message: string }>('/telegram/test'),
+  },
+
+  corporate: {
+    refresh: () => post<{ ok: boolean; message: string }>('/corporate-actions/refresh'),
+    dividendHistory: (instrumentId: number) =>
+      get<{ exDate: string; amountE8: number; currency: string }[]>(
+        `/corporate-actions/dividends/${instrumentId}`,
+      ),
+    reportDates: () =>
+      get<{ id: number; instrumentId: number; symbol: string; name: string; date: string; label: string; note: string | null }[]>(
+        '/report-dates',
+      ),
+    addReportDate: (body: { instrumentId: number; date: string; label: string; note?: string }) =>
+      post<unknown>('/report-dates', body),
+    removeReportDate: (id: number) => del<{ ok: boolean }>(`/report-dates/${id}`),
+    missingHoldings: () => get<{ id: number; symbol: string; name: string }[]>('/holdings/missing'),
+    holdings: (instrumentId: number) =>
+      get<{ symbol: string; weightBp: number }[]>(`/holdings/${instrumentId}`),
+    saveHoldings: (instrumentId: number, text: string) =>
+      put<{ ok: boolean; saved: number; holdings: { symbol: string; weightBp: number }[] }>(
+        `/holdings/${instrumentId}`,
+        { text },
+      ),
   },
 
   exportUrls: {

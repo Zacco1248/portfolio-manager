@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { TRANSACTION_TYPE_LABELS } from '@portfolio/shared';
 import type { TransactionType } from '@portfolio/shared';
+import { SymbolSearch } from '@/components/SymbolSearch';
 import { Card, DataTable, EmptyState, ErrorBanner, Field, Modal, Spinner, Toast, useToast } from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
 import { formatCurrency, formatDate, formatPln, formatQuantity, toneClass } from '@/lib/format';
@@ -155,6 +156,10 @@ function TransactionForm({
     fxRate: '',
     note: '',
   });
+  // Instrument spoza bazy zakładamy w locie na podstawie podpowiedzi z API.
+  const [newInstrument, setNewInstrument] = useState<{ symbol: string; name: string; assetClass: string } | null>(
+    null,
+  );
 
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
 
@@ -169,7 +174,22 @@ function TransactionForm({
         tradeDate: form.tradeDate,
         currency: form.currency,
       };
-      if (NEEDS_INSTRUMENT.includes(form.type) && form.instrumentId) payload.instrumentId = Number(form.instrumentId);
+
+      let instrumentId = form.instrumentId ? Number(form.instrumentId) : null;
+
+      // Wyszukany, ale jeszcze nieistniejący instrument zakładamy przed zapisem
+      // transakcji — inaczej użytkownik musiałby robić to w osobnym kroku.
+      if (instrumentId === null && newInstrument) {
+        const created = await api.instruments.create({
+          symbol: newInstrument.symbol,
+          name: newInstrument.name,
+          assetClass: newInstrument.assetClass,
+          currency: form.currency,
+        });
+        instrumentId = created.id;
+      }
+
+      if (NEEDS_INSTRUMENT.includes(form.type) && instrumentId !== null) payload.instrumentId = instrumentId;
       if (NEEDS_QUANTITY.includes(form.type)) {
         payload.quantity = form.quantity;
         payload.price = form.price;
@@ -220,19 +240,43 @@ function TransactionForm({
         </div>
 
         {NEEDS_INSTRUMENT.includes(form.type) && (
-          <Field label="Instrument">
-            <select className="input" value={form.instrumentId} onChange={(e) => {
-              const selected = instruments.data?.find((i) => String(i.id) === e.target.value);
-              set({ instrumentId: e.target.value, currency: selected?.currency ?? form.currency });
-            }}>
-              <option value="">— wybierz —</option>
-              {(instruments.data ?? []).map((instrument) => (
-                <option key={instrument.id} value={instrument.id}>
-                  {instrument.symbol} · {instrument.name}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Instrument z bazy">
+              <select
+                className="input"
+                value={form.instrumentId}
+                onChange={(e) => {
+                  const selected = instruments.data?.find((i) => String(i.id) === e.target.value);
+                  set({ instrumentId: e.target.value, currency: selected?.currency ?? form.currency });
+                  if (e.target.value) setNewInstrument(null);
+                }}
+              >
+                <option value="">— wybierz —</option>
+                {(instruments.data ?? []).map((instrument) => (
+                  <option key={instrument.id} value={instrument.id}>
+                    {instrument.symbol} · {instrument.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="…albo wyszukaj nowy" hint="Podpowiedzi z bazy i z wyszukiwarki dostawcy notowań.">
+              <SymbolSearch
+                value={newInstrument?.symbol ?? ''}
+                onChange={(symbol) =>
+                  setNewInstrument(symbol ? { symbol, name: newInstrument?.name ?? symbol, assetClass: 'stock' } : null)
+                }
+                onPick={(suggestion) => {
+                  setNewInstrument({
+                    symbol: suggestion.symbol,
+                    name: suggestion.name,
+                    assetClass: suggestion.assetClass,
+                  });
+                  set({ instrumentId: '' });
+                }}
+              />
+            </Field>
+          </div>
         )}
 
         <div className="grid gap-3 sm:grid-cols-3">

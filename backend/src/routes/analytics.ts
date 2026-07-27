@@ -16,11 +16,21 @@ import {
   refreshAllBenchmarks,
 } from '../services/analytics.js';
 import { buildDashboard } from '../services/dashboard.js';
+import { upcomingDividends } from '../services/corporate-actions.js';
 import { activePortfolioIds, buildPositions, toInstrumentDto } from '../services/positions.js';
 import { computeIndicators, currentState, detectSignals } from '../services/technical.js';
 import { writeDailySnapshot } from '../services/snapshots.js';
 
 export const analyticsRouter = Router();
+
+const CADENCE_LABELS: Record<string, string> = {
+  monthly: 'miesięczny',
+  quarterly: 'kwartalny',
+  semiannual: 'półroczny',
+  annual: 'roczny',
+};
+
+const cadenceLabel = (cadence: string): string => CADENCE_LABELS[cadence] ?? cadence;
 
 const portfolioQuery = z.object({ portfolioId: z.coerce.number().int().positive().optional() });
 
@@ -36,7 +46,7 @@ analyticsRouter.get('/', (req, res, next) => {
 
   const keys = parsed.data.benchmarks
     ? parsed.data.benchmarks.split(',').map((s) => s.trim()).filter((s) => s in BENCHMARKS)
-    : ['WIG20', 'SP500'];
+    : ['WIG20TR', 'SP500'];
 
   res.json(
     buildAnalytics(activePortfolioIds(parsed.data.portfolioId), parsed.data.from, parsed.data.to, keys),
@@ -162,7 +172,16 @@ analyticsRouter.get('/dividends', (req, res, next) => {
       .map(([year, v]) => ({ year, ...v }))
       .sort((a, b) => b.year - a.year),
     trailingYieldBp: portfolioValue > 0 ? Math.round((trailing / portfolioValue) * 10_000) : null,
-    upcoming: [],
+    // Terminy są prognozą z rytmu poprzednich wypłat — darmowe źródła nie
+    // podają przyszłych dat ustalenia prawa. UI musi to oznaczyć.
+    upcoming: upcomingDividends([...new Set(positions.map((p) => p.instrument.id))]).map((entry) => ({
+      instrument: instrumentMap.has(entry.instrumentId)
+        ? toInstrumentDto(instrumentMap.get(entry.instrumentId)!)
+        : null,
+      exDate: entry.expectedExDate,
+      payDate: null,
+      note: `Prognoza na podstawie ${entry.observations} poprzednich wypłat (rytm: ${cadenceLabel(entry.cadence)}). Ostatnia: ${entry.lastExDate}.`,
+    })).filter((e): e is { instrument: NonNullable<typeof e.instrument>; exDate: string; payDate: null; note: string } => e.instrument !== null),
   };
 
   res.json(summary);
