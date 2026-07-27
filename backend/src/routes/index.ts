@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
+import { analyticsRouter } from './analytics.js';
 import { authRouter } from './auth.js';
 import { instrumentsRouter } from './instruments.js';
 import { portfoliosRouter } from './portfolios.js';
@@ -20,3 +21,4 @@ apiRouter.use('/portfolios', portfoliosRouter);
 apiRouter.use('/instruments', instrumentsRouter);
 apiRouter.use('/transactions', transactionsRouter);
 apiRouter.use('/positions', positionsRouter);
+apiRouter.use('/analytics', analyticsRouter);

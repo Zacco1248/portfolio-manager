@@ -1,4 +1,6 @@
 import { config } from '../config.js';
+import { earliestTransactionDate, refreshAllBenchmarks, BENCHMARKS } from '../services/analytics.js';
+import { writeDailySnapshot } from '../services/snapshots.js';
 import { refreshFxRates } from '../services/fx.js';
 import { instrumentsNeedingPrices, isMarketHours, refreshQuotes } from '../services/prices.js';
 import type { ScheduleFn } from './index.js';
@@ -17,4 +19,12 @@ export function registerDataJobs(schedule: ScheduleFn): void {
 
   // NBP publikuje tabelę A około 12:00 — odpytujemy chwilę później.
   schedule('fx:refresh', '15 12 * * 1-5', config.cron.fx, async () => refreshFxRates());
+
+  // Snapshot pod koniec dnia, po zamknięciu sesji na GPW i w USA.
+  schedule('portfolio:snapshot', '50 23 * * *', config.cron.snapshot, async () => writeDailySnapshot());
+
+  // Benchmarki zmieniają się raz dziennie — wystarczy odświeżenie po sesji.
+  schedule('benchmarks:refresh', '30 23 * * 1-5', config.cron.snapshot, async () =>
+    refreshAllBenchmarks(Object.keys(BENCHMARKS), earliestTransactionDate()),
+  );
 }
