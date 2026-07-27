@@ -122,8 +122,19 @@ export const transactions = sqliteTable(
     /** Kurs NBP tabela A z dnia poprzedzającego transakcję (D-1) — tak liczy skarbówka. */
     fxRateE6: integer('fx_rate_e6').notNull().default(1_000_000),
     fxDate: text('fx_date'),
-    /** Kwota rozliczeniowa w PLN, z prowizją. Wyliczana raz przy zapisie. */
+    /**
+     * Kurs faktycznie zastosowany przez brokera przy rozliczeniu. Bywa inny niż
+     * NBP D-1 (XTB przelicza po własnym kursie z chwili transakcji), więc bez
+     * tego pola saldo gotówki nie zgadzałoby się z wyciągiem.
+     */
+    settlementFxRateE6: integer('settlement_fx_rate_e6'),
+    /** Faktyczny przepływ gotówki w PLN, z prowizją. Podpisany: ujemny = wypływ. */
     amountPlnMinor: integer('amount_pln_minor').notNull().default(0),
+    /**
+     * Ta sama kwota przeliczona po kursie NBP D-1 — wyłącznie podstawa
+     * rozliczenia podatkowego. Dla transakcji w PLN równa `amount_pln_minor`.
+     */
+    taxAmountPlnMinor: integer('tax_amount_pln_minor').notNull().default(0),
     note: text('note'),
     importBatchId: integer('import_batch_id').references(() => importBatches.id, { onDelete: 'set null' }),
     /**
@@ -173,9 +184,14 @@ export const realizedGains = sqliteTable(
     saleDate: text('sale_date').notNull(),
     purchaseDate: text('purchase_date').notNull(),
     qtyE8: integer('qty_e8').notNull(),
+    /** Wynik faktyczny — po kursach rozliczeniowych brokera. Do prezentacji. */
     costPlnMinor: integer('cost_pln_minor').notNull(),
     proceedsPlnMinor: integer('proceeds_pln_minor').notNull(),
     gainPlnMinor: integer('gain_pln_minor').notNull(),
+    /** Wynik podatkowy — po kursach NBP D-1. To trafia do PIT-38. */
+    taxCostPlnMinor: integer('tax_cost_pln_minor').notNull().default(0),
+    taxProceedsPlnMinor: integer('tax_proceeds_pln_minor').notNull().default(0),
+    taxGainPlnMinor: integer('tax_gain_pln_minor').notNull().default(0),
     year: integer('year').notNull(),
   },
   (t) => [

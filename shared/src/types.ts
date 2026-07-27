@@ -62,9 +62,15 @@ export interface Transaction {
   feeMinor: number;
   taxMinor: number;
   currency: string;
+  /** Kurs NBP D-1 — podstawa podatkowa. */
   fxRateE6: number;
   fxDate: string | null;
+  /** Kurs faktycznie zastosowany przez brokera, jeśli znany z importu. */
+  settlementFxRateE6: number | null;
+  /** Faktyczny przepływ gotówki w PLN. */
   amountPlnMinor: number;
+  /** Ten sam przepływ po kursie NBP — wyłącznie do rozliczenia podatkowego. */
+  taxAmountPlnMinor: number;
   note: string | null;
   importBatchId: number | null;
   createdAt: string;
@@ -166,9 +172,14 @@ export interface RealizedGain {
   saleDate: string;
   purchaseDate: string;
   qtyE8: number;
+  /** Wynik faktyczny — po kursach rozliczeniowych. */
   costPlnMinor: number;
   proceedsPlnMinor: number;
   gainPlnMinor: number;
+  /** Wynik podatkowy — po kursach NBP D-1. To trafia do PIT-38. */
+  taxCostPlnMinor: number;
+  taxProceedsPlnMinor: number;
+  taxGainPlnMinor: number;
   year: number;
 }
 

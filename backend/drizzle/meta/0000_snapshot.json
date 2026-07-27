@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "44aa16ec-ed16-47ec-9449-d16c227f8a5d",
+  "id": "e3d7f60b-c915-43ed-a7ab-097ece8529ee",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "alert_events": {
@@ -1600,6 +1600,30 @@
           "notNull": true,
           "autoincrement": false
         },
+        "tax_cost_pln_minor": {
+          "name": "tax_cost_pln_minor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "tax_proceeds_pln_minor": {
+          "name": "tax_proceeds_pln_minor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "tax_gain_pln_minor": {
+          "name": "tax_gain_pln_minor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
         "year": {
           "name": "year",
           "type": "integer",
@@ -2037,8 +2061,23 @@
           "notNull": false,
           "autoincrement": false
         },
+        "settlement_fx_rate_e6": {
+          "name": "settlement_fx_rate_e6",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "amount_pln_minor": {
           "name": "amount_pln_minor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "tax_amount_pln_minor": {
+          "name": "tax_amount_pln_minor",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
