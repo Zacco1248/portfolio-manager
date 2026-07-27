@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm -v)",
+      "Bash(git --version)",
+      "Bash(gh --version)",
+      "Bash(gh auth *)",
+      "Bash(docker --version)",
+      "Bash([ -x \"$TS\" ])",
+      "Bash('/c/Program Files/Tailscale/tailscale.exe' status)",
+      "Bash(command -v tailscale)",
+      "Bash(tailscale status *)",
+      "PowerShell($r = Test-NetConnection -ComputerName 100.83.129.112 -Port 8080 -WarningAction SilentlyContinue; \"8080 TcpTestSucceeded: $\\($r.TcpTestSucceeded\\)\"; $s = Test-NetConnection -ComputerName 100.83.129.112 -Port 22 -WarningAction SilentlyContinue; \"22 TcpTestSucceeded: $\\($s.TcpTestSucceeded\\)\"; $p = Test-NetConnection -ComputerName 100.83.129.112 -Port 80 -WarningAction SilentlyContinue; \"80 TcpTestSucceeded: $\\($p.TcpTestSucceeded\\)\")",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new zacco@100.83.129.112 \"ss -tlnp 2>/dev/null | head -30; echo ---; docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null\")",
+      "Bash(python -c ' *)",
+      "Bash(mkdir -p C:/Users/Zacco/AppData/Local/Temp/claude/c--Users-Zacco-Desktop-portfel-inwestycyjny/ad133932-7aa9-4c13-85c4-9f52b2d0e572/scratchpad)",
+      "Bash(pip install *)",
+      "Bash(npm install *)",
+      "Bash(npx drizzle-kit *)"
+    ]
+  }
+}

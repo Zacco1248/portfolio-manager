@@ -1,0 +1,38 @@
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Dane użytkownika — nigdy do repo
+data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+
+# Pliki importu z realnymi danymi finansowymi
+import/
+!import/.gitkeep
+
+# Sekrety
+.env
+.env.local
+.env.*.local
+
+# Backupy
+backups/
+*.bak
+
+# Logi
+*.log
+npm-debug.log*
+
+# Narzędzia
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+coverage/
+.vite/

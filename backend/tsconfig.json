@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "noEmit": true,
+    "types": ["node"],
+    "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@portfolio/shared": ["../shared/src/index.ts"],
+      "@portfolio/shared/*": ["../shared/src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "drizzle.config.ts", "tsup.config.ts", "vitest.config.ts"]
+}
