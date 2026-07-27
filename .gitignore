@@ -36,3 +36,6 @@ Thumbs.db
 .idea/
 coverage/
 .vite/
+
+# Lokalna konfiguracja Claude Code (zawiera adresy hostów)
+.claude/
