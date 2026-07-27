@@ -1,6 +1,8 @@
 import { config } from '../config.js';
 import { earliestTransactionDate, refreshAllBenchmarks, BENCHMARKS } from '../services/analytics.js';
 import { writeDailySnapshot } from '../services/snapshots.js';
+import { evaluateAlerts } from '../services/alerts.js';
+import { analyzePendingNews, fetchNews } from '../services/news.js';
 import { refreshFxRates } from '../services/fx.js';
 import { instrumentsNeedingPrices, isMarketHours, refreshQuotes } from '../services/prices.js';
 import type { ScheduleFn } from './index.js';
@@ -27,4 +29,15 @@ export function registerDataJobs(schedule: ScheduleFn): void {
   schedule('benchmarks:refresh', '30 23 * * 1-5', config.cron.snapshot, async () =>
     refreshAllBenchmarks(Object.keys(BENCHMARKS), earliestTransactionDate()),
   );
+
+  // Newsy co godzinę; analiza AI idzie zaraz po pobraniu, żeby nie mnożyć
+  // wywołań modelu na te same wiadomości.
+  schedule('news:fetch', '5 * * * *', config.cron.news, async () => {
+    const fetched = await fetchNews();
+    const analyzed = await analyzePendingNews();
+    return `${fetched}; ${analyzed}`;
+  });
+
+  // Alerty sprawdzamy częściej niż newsy, ale rzadziej niż ceny.
+  schedule('alerts:check', '*/15 * * * *', config.cron.alerts, async () => evaluateAlerts());
 }

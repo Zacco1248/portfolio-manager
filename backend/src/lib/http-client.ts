@@ -10,6 +10,9 @@ export interface FetchOptions {
   headers?: Record<string, string>;
   /** Minimalny odstęp między requestami do tego hosta. */
   minIntervalMs?: number;
+  method?: 'GET' | 'POST';
+  /** Ciało żądania; obiekt jest serializowany do JSON-a. */
+  body?: unknown;
 }
 
 const DEFAULTS = { timeoutMs: 12_000, retries: 3, minIntervalMs: 250 };
@@ -79,9 +82,7 @@ export async function fetchWithRetry(url: string, options: FetchOptions = {}): P
     }
 
     try {
-      const response = await throttleByHost(url, minIntervalMs, () =>
-        doFetch(url, timeoutMs, options.headers),
-      );
+      const response = await throttleByHost(url, minIntervalMs, () => doFetch(url, timeoutMs, options));
 
       if (response.ok) return response;
 
@@ -98,18 +99,23 @@ export async function fetchWithRetry(url: string, options: FetchOptions = {}): P
   throw lastError instanceof Error ? lastError : new Error(`Nie udało się pobrać ${url}`);
 }
 
-async function doFetch(url: string, timeoutMs: number, headers?: Record<string, string>): Promise<Response> {
+async function doFetch(url: string, timeoutMs: number, options: FetchOptions): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const hasBody = options.body !== undefined;
+
   try {
     return await fetch(url, {
+      method: options.method ?? (hasBody ? 'POST' : 'GET'),
       signal: controller.signal,
       headers: {
         // Część darmowych endpointów odrzuca requesty bez User-Agenta.
         'User-Agent': 'portfolio-manager/0.1 (self-hosted)',
         Accept: '*/*',
-        ...headers,
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+        ...options.headers,
       },
+      ...(hasBody ? { body: typeof options.body === 'string' ? options.body : JSON.stringify(options.body) } : {}),
       redirect: 'follow',
     });
   } finally {
