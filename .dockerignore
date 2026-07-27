@@ -1,0 +1,16 @@
+node_modules
+**/node_modules
+**/dist
+data
+backups
+import
+.git
+.github
+.env
+.env.*
+!.env.example
+*.log
+.claude
+.vscode
+.idea
+coverage

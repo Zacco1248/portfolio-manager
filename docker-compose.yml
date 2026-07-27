@@ -1,0 +1,30 @@
+services:
+  app:
+    build: .
+    image: portfolio-manager:latest
+    container_name: portfolio-manager
+    restart: unless-stopped
+    # Nasłuch na wszystkich interfejsach jest potrzebny, żeby aplikacja była
+    # widoczna w LAN i przez Tailscale. Nie wystawiaj tego portu na router.
+    ports:
+      - '${PORT:-8080}:8080'
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_PATH: /app/data/portfolio.sqlite
+    volumes:
+      # Cały stan aplikacji siedzi tutaj — skopiowanie tego katalogu
+      # wystarcza do przeniesienia instalacji na inny serwer.
+      - ./data:/app/data
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'

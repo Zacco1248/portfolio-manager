@@ -1,0 +1,112 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Motyw ciemny jest domyślny — aplikacja jest narzędziem, z którego korzysta
+ * się wieczorami przy własnych finansach. Motyw jasny jest pełnoprawny,
+ * nie odwróceniem kolorów na siłę.
+ */
+@layer base {
+  :root {
+    --surface-base: 250 250 250;
+    --surface-raised: 255 255 255;
+    --surface-overlay: 244 244 245;
+    --surface-border: 228 228 231;
+    --content-primary: 24 24 27;
+    --content-secondary: 82 82 91;
+    --content-muted: 140 140 150;
+    --accent: 37 99 235;
+    --gain: 21 128 61;
+    --loss: 190 24 44;
+    --warn: 180 83 9;
+  }
+
+  .dark {
+    --surface-base: 10 11 13;
+    --surface-raised: 22 24 28;
+    --surface-overlay: 32 35 40;
+    --surface-border: 46 50 57;
+    --content-primary: 240 241 243;
+    --content-secondary: 168 172 180;
+    --content-muted: 116 122 132;
+    --accent: 96 165 250;
+    --gain: 52 199 123;
+    --loss: 248 96 106;
+    --warn: 245 176 65;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-surface-base text-content-primary antialiased;
+    font-feature-settings: 'tnum' 1, 'cv05' 1;
+  }
+
+  /* Liczby w tabelach muszą być tej samej szerokości, żeby kolumny nie skakały. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-surface-border;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-card border border-surface-border bg-surface-raised;
+  }
+
+  .card-title {
+    @apply px-4 pt-3 text-2xs font-semibold uppercase tracking-wider text-content-muted;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-surface-border
+           bg-surface-overlay px-3 py-1.5 text-sm font-medium text-content-primary
+           transition-colors hover:border-content-muted disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply border-transparent bg-accent text-white hover:opacity-90;
+  }
+
+  .btn-ghost {
+    @apply border-transparent bg-transparent hover:bg-surface-overlay;
+  }
+
+  .input {
+    @apply w-full rounded-md border border-surface-border bg-surface-base px-2.5 py-1.5 text-sm
+           text-content-primary outline-none transition-colors placeholder:text-content-muted
+           focus:border-accent;
+  }
+
+  .label {
+    @apply mb-1 block text-2xs font-medium uppercase tracking-wide text-content-muted;
+  }
+
+  .table-head {
+    @apply sticky top-0 z-10 bg-surface-raised text-2xs font-semibold uppercase
+           tracking-wider text-content-muted;
+  }
+
+  .table-cell {
+    @apply whitespace-nowrap px-3 py-2 text-sm;
+  }
+
+  .badge {
+    @apply inline-flex items-center rounded px-1.5 py-0.5 text-2xs font-medium;
+  }
+}

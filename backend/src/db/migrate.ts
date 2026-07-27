@@ -25,8 +25,9 @@ export function runMigrations(): void {
   log.info('Migracje zastosowane');
 }
 
-// Uruchomienie bezpośrednie: `npm run db:migrate`
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  runMigrations();
-  process.exit(0);
-}
+// Uwaga: nie ma tu strażnika „czy uruchomiono bezpośrednio" opartego na
+// porównaniu `import.meta.url` z `process.argv[1]`. W builds produkcyjnym
+// cały backend jest bundlowany do jednego pliku, więc każdy moduł dzieli ten
+// sam `import.meta.url` — taki warunek byłby zawsze prawdziwy i proces
+// kończyłby się zaraz po migracjach, nigdy nie startując serwera.
+// Ręczne uruchomienie migracji obsługuje osobny skrypt `migrate-cli.ts`.
