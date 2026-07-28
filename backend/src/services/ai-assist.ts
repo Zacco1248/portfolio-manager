@@ -465,9 +465,22 @@ export async function explainPriceMove(instrumentId: number): Promise<AssistResu
   }
 
   /*
-   * To samo z notowaniami. Pusta historia to luka w naszej bazie, a nie
-   * zawieszenie obrotu — ale bez uzupełnienia nie ma czego wyjaśniać, a model
-   * dostawszy „brak notowań" potrafi wysnuć z tego nieistniejące zdarzenie.
+   * Zmianę kursu bierzemy wprost od dostawcy, nie z zapisanej historii.
+   *
+   * Nasza baza jest uzupełniana zadaniem cyklicznym, więc bywa o dzień do dwóch
+   * z tyłu albo pusta dla świeżo dodanej pozycji — a to jest jedyna liczba,
+   * wokół której model buduje całe wyjaśnienie. Zapisana historia zostaje jako
+   * zapas na wypadek niedostępności dostawcy.
+   */
+  const live = await livePriceChange(instrumentId);
+  if (live !== null) {
+    facts = { ...facts, changeBp: live, priceSource: 'dostawca' };
+  }
+
+  /*
+   * Pusta historia w bazie to luka w danych, a nie zawieszenie obrotu.
+   * Uzupełniamy ją niezależnie od powyższego — z niej powstaje wykres
+   * i analiza techniczna, których jedna liczba nie zastąpi.
    */
   if (facts.candleCount < 2) {
     try {
@@ -475,20 +488,12 @@ export async function explainPriceMove(instrumentId: number): Promise<AssistResu
       log.info(
         `Brak notowań instrumentu ${instrumentId} — uzupełniam: ${await backfillInstrumentHistory(instrumentId)} świec`,
       );
-      facts = priceMoveFacts(instrumentId) ?? facts;
+      const refreshed = priceMoveFacts(instrumentId);
+      // Uzupełnienie odświeża liczbę sesji, ale zmiany kursu od dostawcy nie nadpisuje.
+      if (refreshed) facts = { ...refreshed, changeBp: facts.changeBp, priceSource: facts.priceSource };
     } catch (err) {
       log.warn(`Doraźne uzupełnienie notowań nieudane: ${errorMessage(err)}`);
     }
-  }
-
-  /*
-   * Ostatnia deska ratunku: zmiana liczona wprost z odpowiedzi dostawcy, bez
-   * pośrednictwa bazy. Zapis potrafi się nie udać z powodów niezwiązanych
-   * z dostępnością notowań, a do wyjaśnienia ruchu wystarczy sama liczba.
-   */
-  if (facts.changeBp === null) {
-    const live = await livePriceChange(instrumentId);
-    if (live !== null) facts = { ...facts, changeBp: live, priceSource: 'dostawca' };
   }
 
   const payload = [
@@ -765,8 +770,8 @@ export async function suggestImportMapping(
  * Zmiana kursu odczytana bezpośrednio od dostawcy notowań.
  *
  * Rejestr sam próbuje kolejnych źródeł (Yahoo, Stooq, CoinGecko) i zwraca
- * pierwsze, które odpowie. Nie zapisujemy tych świec — chodzi wyłącznie o to,
- * żeby móc podać skalę ruchu, gdy lokalna historia jest pusta.
+ * pierwsze, które odpowie. Nie zapisujemy tych świec — to osobna ścieżka niż
+ * uzupełnianie historii i ma być odporna na jej niepowodzenie.
  */
 async function livePriceChange(instrumentId: number): Promise<number | null> {
   try {
