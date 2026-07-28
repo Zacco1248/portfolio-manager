@@ -295,3 +295,36 @@ export async function assessFit(instrumentId: number, portfolioId?: number): Pro
     return { snapshot, text: null, unavailableReason: 'Model nie odpowiedział.', disclaimer };
   }
 }
+
+
+/**
+ * Konsensus rekomendacji dla jednego instrumentu.
+ *
+ * Wydzielone z przeglądu, bo karta instrumentu potrzebuje wyłącznie tego —
+ * uzupełnianie historii notowań i liczenie wskaźników trwałoby tam bez powodu.
+ */
+export async function instrumentRatings(instrumentId: number): Promise<RatingConsensus | null> {
+  const instrument = db.select().from(instruments).where(eq(instruments.id, instrumentId)).get();
+  if (!instrument) return null;
+
+  const latest = db
+    .select()
+    .from(pricesDaily)
+    .where(eq(pricesDaily.instrumentId, instrumentId))
+    .orderBy(desc(pricesDaily.date))
+    .limit(1)
+    .get();
+
+  let consensus = ratingConsensus(instrumentId, latest?.closeE8 ?? null);
+
+  if (consensus.entries.length === 0) {
+    try {
+      await fetchRecommendations(instrument);
+      consensus = ratingConsensus(instrumentId, latest?.closeE8 ?? null);
+    } catch (err) {
+      log.warn(`Rekomendacje ${instrument.symbol} nieosiągalne: ${errorMessage(err)}`);
+    }
+  }
+
+  return consensus;
+}

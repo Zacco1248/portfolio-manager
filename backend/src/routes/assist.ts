@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/http.js';
-import { assessFit, buildResearch, searchCompanies } from '../services/research.js';
+import { assessFit, buildResearch, instrumentRatings, searchCompanies } from '../services/research.js';
 import {
   DOCUMENT_LIMIT,
   MOVE_WINDOWS,
@@ -164,6 +164,25 @@ assistRouter.post(
       .parse(req.body ?? {});
 
     const result = await assessFit(parsed.instrumentId, parsed.portfolioId);
+    if (!result) {
+      res.status(404).json({ error: { message: 'Nie ma takiego instrumentu' } });
+      return;
+    }
+    res.json(result);
+  }),
+);
+
+/**
+ * Same rekomendacje, bez reszty przeglądu.
+ *
+ * Karta instrumentu ma już własne notowania i wskaźniki, więc pełny przegląd
+ * byłby tam podwójną pracą — a to on odpowiada za czas oczekiwania.
+ */
+assistRouter.get(
+  '/ratings/:id',
+  asyncHandler(async (req, res) => {
+    const id = z.coerce.number().int().positive().parse(req.params.id);
+    const result = await instrumentRatings(id);
     if (!result) {
       res.status(404).json({ error: { message: 'Nie ma takiego instrumentu' } });
       return;

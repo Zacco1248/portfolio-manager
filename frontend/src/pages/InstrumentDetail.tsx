@@ -4,6 +4,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { ASSET_CLASS_LABELS } from '@portfolio/shared';
 import type { AssetClass } from '@portfolio/shared';
 import { CandlestickChart } from '@/components/CandlestickChart';
+import { RatingsCard } from '@/components/RatingsCard';
 import { Card, DataTable, ErrorBanner, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { PriceMoveFacts, SavedAnalysis } from '@/lib/api';
@@ -78,6 +79,8 @@ export function InstrumentDetail() {
       <ClassificationCard instrument={instrument} onSaved={reload} />
 
       <PriceMoveCard instrumentId={instrumentId} />
+
+      <InstrumentRatings instrumentId={instrumentId} />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile label="RSI (14)" value={state.rsi === null ? '—' : state.rsi.toFixed(1)} tone={rsiTone(state.rsiZone)} />
@@ -200,6 +203,19 @@ export function InstrumentDetail() {
       </Card>
     </div>
   );
+}
+
+/**
+ * Rekomendacje analityków dla tego instrumentu.
+ *
+ * Ładowane osobno, bo pierwsze wejście potrafi dociągnąć je z sieci, a reszta
+ * karty jest gotowa od razu.
+ */
+function InstrumentRatings({ instrumentId }: { instrumentId: number }) {
+  const ratings = useAsync(() => api.assist.ratings(instrumentId), [instrumentId]);
+
+  if (ratings.loading || !ratings.data) return null;
+  return <RatingsCard ratings={ratings.data} />;
 }
 
 /**

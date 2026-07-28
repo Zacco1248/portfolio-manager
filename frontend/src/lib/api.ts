@@ -228,6 +228,7 @@ export const api = {
       get<{ id: number | null; symbol: string; name: string; assetClass: string; exchange: string | null; known: boolean }[]>(
         `/assist/search${query({ q })}`,
       ),
+    ratings: (instrumentId: number) => get<ResearchSnapshot['ratings']>(`/assist/ratings/${instrumentId}`),
     research: (instrumentId: number, portfolioId?: number) =>
       get<ResearchSnapshot>(`/assist/research/${instrumentId}${query({ portfolioId })}`),
     fit: (instrumentId: number, portfolioId?: number) =>
