@@ -64,6 +64,8 @@ export const instrumentCreateSchema = z.object({
   providerSymbol: z.string().trim().max(60).optional(),
   /** Jednostka pozycji dla metali: oz, g, kg. Decyduje o przeliczeniu ceny spot. */
   unit: z.enum(['oz', 'g', 'kg']).optional(),
+  /** Czy pozycja wlicza się do poduszki finansowej. */
+  emergencyFund: z.boolean().optional(),
 });
 
 export const instrumentUpdateSchema = instrumentCreateSchema.partial();

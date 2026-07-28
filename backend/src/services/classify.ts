@@ -136,12 +136,48 @@ const CLASS_DEFAULTS: Partial<Record<AssetClass, { sector: string; country?: str
  * nie mają tam wpisów, a kraju nie zwraca żaden z używanych endpointów. Bez tej
  * warstwy wykresy struktury pokazują niemal wyłącznie „nieprzypisane".
  */
+/**
+ * Region ekspozycji funduszu odczytany z nazwy.
+ *
+ * Kraj notowania to dla ETF-a informacja myląca: fundusz na amerykańskie
+ * spółki notowany w Londynie nie jest ekspozycją na Wielką Brytanię. Nazwy
+ * funduszy są jednak silnie skonwencjonalizowane i indeks widnieje w nich
+ * wprost, więc da się z nich odczytać to, co naprawdę interesuje inwestora.
+ *
+ * Kolejność ma znaczenie — „MSCI World ex USA" musi trafić przed „USA".
+ */
+const FUND_REGIONS: { match: RegExp; region: string }[] = [
+  { match: /\bex[- ]?(us|usa)\b/i, region: 'Rynki rozwinięte bez USA' },
+  { match: /emerging|\bem\b|wschodząc/i, region: 'Rynki wschodzące' },
+  { match: /\bacwi\b|all[- ]?country|all[- ]?world|\bglobal\b|\bworld\b|\bftse all\b/i, region: 'Świat' },
+  { match: /s&?p ?500|\bnasdaq\b|\bus\b|\busa\b|united states|russell|dow jones|\bs&p\b/i, region: 'USA' },
+  { match: /\bwig\b|\bmwig\b|\bswig\b|polish|poland|polska/i, region: 'Polska' },
+  { match: /euro ?stoxx|\bstoxx\b|\beurope\b|europa|\bemu\b|\beuro\b/i, region: 'Europa' },
+  { match: /\bdax\b|german/i, region: 'Niemcy' },
+  { match: /\bftse 100\b|\buk\b|united kingdom/i, region: 'Wielka Brytania' },
+  { match: /\bjapan\b|\btopix\b|\bnikkei\b|japon/i, region: 'Japonia' },
+  { match: /\bchina\b|\bchiny\b|\bhang seng\b/i, region: 'Chiny' },
+  { match: /\bindia\b|\bindie\b/i, region: 'Indie' },
+  { match: /pacific|asia|azja/i, region: 'Azja i Pacyfik' },
+];
+
+export function fundRegion(name: string): string | null {
+  return FUND_REGIONS.find((entry) => entry.match.test(name))?.region ?? null;
+}
+
 export function localClassification(instrument: {
   symbol: string;
+  name?: string;
   exchange: string | null;
   assetClass: string;
 }): { sector: string | null; country: string | null } {
   const defaults = CLASS_DEFAULTS[instrument.assetClass as AssetClass];
+
+  // Dla funduszu liczy się to, w co inwestuje, a nie gdzie jest notowany.
+  if (instrument.assetClass === 'etf') {
+    const region = fundRegion(`${instrument.name ?? ''} ${instrument.symbol}`);
+    if (region) return { sector: 'Fundusze (wiele sektorów)', country: region };
+  }
 
   const codes = [
     instrument.exchange,
@@ -232,6 +268,13 @@ export async function classifyAll(options: { force?: boolean } = {}): Promise<Cl
     const localPatch: Partial<InstrumentRow> = {};
     if (!row.sector && local.sector) localPatch.sector = local.sector;
     if (!row.country && local.country) localPatch.country = local.country;
+
+    // Funduszom przypisanym wcześniej do kraju notowania podmieniamy kraj na
+    // region ekspozycji — inaczej ETF na S&P 500 zostałby „Irlandią".
+    if (row.assetClass === 'etf' && row.country && local.country && row.country !== local.country) {
+      const wasExchangeGuess = Object.values(EXCHANGE_COUNTRIES).includes(row.country);
+      if (wasExchangeGuess) localPatch.country = local.country;
+    }
     if (Object.keys(localPatch).length > 0) {
       db.update(instruments).set(localPatch).where(eq(instruments.id, row.id)).run();
       result.updated += 1;

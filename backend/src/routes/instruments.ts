@@ -92,6 +92,7 @@ instrumentsRouter.patch('/:id', (req, res, next) => {
       ...(parsed.data.provider !== undefined ? { provider: parsed.data.provider } : {}),
       ...(parsed.data.providerSymbol !== undefined ? { providerSymbol: parsed.data.providerSymbol } : {}),
       ...(parsed.data.unit !== undefined ? { unit: parsed.data.unit } : {}),
+      ...(parsed.data.emergencyFund !== undefined ? { emergencyFund: parsed.data.emergencyFund } : {}),
     })
     .where(eq(instruments.id, id.data))
     .returning()

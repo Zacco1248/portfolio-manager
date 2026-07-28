@@ -51,6 +51,8 @@ export interface Instrument {
   providerSymbol: string | null;
   /** Jednostka pozycji dla metali (oz, g, kg); null dla pozostałych klas. */
   unit: string | null;
+  /** Czy pozycja wlicza się do poduszki finansowej. */
+  emergencyFund?: boolean;
 }
 
 export interface Transaction {

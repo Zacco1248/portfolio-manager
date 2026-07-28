@@ -65,6 +65,14 @@ export const instruments = sqliteTable(
     providerSymbol: text('provider_symbol'),
     /** Dla metali: jednostka pozycji (g, oz, kg) — wycena idzie przez cenę spot za uncję. */
     unit: text('unit'),
+    /**
+     * Czy pozycja liczy się do poduszki finansowej.
+     *
+     * Poduszka nie musi być osobnym portfelem — obligacje skarbowe trzymane
+     * obok akcji pełnią tę rolę równie dobrze, a przenoszenie ich gdzie indziej
+     * psułoby historię i FIFO.
+     */
+    emergencyFund: integer('emergency_fund', { mode: 'boolean' }).notNull().default(false),
     /** Ekspozycja ETF-a na spółki, do wykrywania nakładania się funduszy. */
     holdings: text('holdings', { mode: 'json' }).$type<{ symbol: string; weightBp: number }[]>(),
     meta: text('meta', { mode: 'json' }).$type<Record<string, unknown>>(),

@@ -212,6 +212,21 @@ export const api = {
       ),
   },
 
+  assist: {
+    monthlySummary: (body: { portfolioId?: number; month?: string }) =>
+      post<AssistResult<MonthlyFacts>>('/assist/monthly-summary', body),
+    priceMove: (instrumentId: number) =>
+      post<AssistResult<PriceMoveFacts | null>>('/assist/price-move', { instrumentId }),
+    purchaseCheck: (body: { portfolioId?: number; symbol: string; amount: string }) =>
+      post<AssistResult<PurchaseCheckFacts>>('/assist/purchase-check', body),
+    document: (text: string) =>
+      post<AssistResult<{ characters: number; truncated: boolean }>>('/assist/document', { text }),
+    tax: (body: { portfolioId?: number; year: number; question: string }) =>
+      post<AssistResult<TaxAssistantFacts>>('/assist/tax', body),
+    importMapping: (headers: string[], samples: string[][]) =>
+      post<AssistResult<{ headers: string[]; sampleCount: number }>>('/assist/import-mapping', { headers, samples }),
+  },
+
   tax: {
     years: () => get<number[]>('/tax/years'),
     report: (year: number, portfolioId?: number) => get<TaxReport>(`/tax${query({ year, portfolioId })}`),
@@ -352,4 +367,66 @@ export interface StatsResponse {
     shareOfResultBp: number;
   }[];
   note: string;
+}
+
+/**
+ * Odpowiedź asystenta: fakty policzone lokalnie plus opcjonalny komentarz
+ * modelu. `text` jest puste, gdy funkcja jest wyłączona — wtedy powód siedzi
+ * w `unavailableReason`, a dane i tak przychodzą.
+ */
+export interface AssistResult<T> {
+  data: T;
+  text: string | null;
+  unavailableReason: string | null;
+  disclaimer: string;
+}
+
+export interface MonthlyFacts {
+  month: string;
+  valueStartPlnMinor: number | null;
+  valueEndPlnMinor: number | null;
+  contributedPlnMinor: number;
+  changeBp: number | null;
+  buys: number;
+  sells: number;
+  dividendsPlnMinor: number;
+  realizedPlnMinor: number;
+  movers: { symbol: string; name: string; changeBp: number }[];
+}
+
+export interface PriceMoveFacts {
+  symbol: string;
+  name: string;
+  changeBp: number | null;
+  days: number;
+  headlines: { title: string; publishedAt: string; summary: string | null }[];
+}
+
+export interface PurchaseCheckFacts {
+  symbol: string;
+  amountPlnMinor: number;
+  known: boolean;
+  assetClass: string | null;
+  sector: string | null;
+  country: string | null;
+  shareBeforeBp: number;
+  shareAfterBp: number;
+  assetClassShareBeforeBp: number;
+  assetClassShareAfterBp: number;
+  sectorShareAfterBp: number;
+  countryShareAfterBp: number;
+  portfolioValuePlnMinor: number;
+  warnings: string[];
+}
+
+export interface TaxAssistantFacts {
+  year: number;
+  securitiesGainPlnMinor: number;
+  securitiesTaxPlnMinor: number;
+  cryptoGainPlnMinor: number;
+  cryptoTaxPlnMinor: number;
+  dividendGrossPlnMinor: number;
+  dividendWithholdingPlnMinor: number;
+  dividendDuePlnMinor: number;
+  excludedPortfolios: string[];
 }

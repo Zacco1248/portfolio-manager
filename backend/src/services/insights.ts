@@ -41,6 +41,8 @@ export interface EmergencyFundStatus {
   coveredMonths: number | null;
   completionBp: number | null;
   portfolioNames: string[];
+  /** Pojedyncze pozycje wskazane ręcznie jako poduszka. */
+  instrumentSymbols: string[];
 }
 
 export interface ProjectionPoint {
@@ -90,18 +92,37 @@ function monthlyContribution(portfolioIds: number[]): number {
   return Math.round(total / months);
 }
 
+/**
+ * Stan poduszki finansowej.
+ *
+ * Poduszkę można wskazać na dwa sposoby i oba liczą się jednocześnie:
+ * całym portfelem (konto oszczędnościowe prowadzone osobno) albo pojedynczymi
+ * pozycjami w portfelu inwestycyjnym (obligacje skarbowe obok akcji).
+ * Pozycje z portfela już oznaczonego jako poduszka nie są liczone drugi raz.
+ */
 export function emergencyFundStatus(): EmergencyFundStatus {
-  const funds = db
+  const active = db
     .select()
     .from(portfolios)
     .all()
-    .filter((p) => p.emergencyFund && !p.archived);
+    .filter((p) => !p.archived);
+
+  const funds = active.filter((p) => p.emergencyFund);
+  const fundIds = new Set(funds.map((p) => p.id));
+  const otherIds = active.filter((p) => !fundIds.has(p.id)).map((p) => p.id);
+
+  // Pozycje oznaczone ręcznie, leżące poza portfelami-poduszkami.
+  const flagged =
+    otherIds.length > 0
+      ? buildPositions(otherIds).positions.filter((p) => p.instrument.emergencyFund === true)
+      : [];
+  const flaggedValue = flagged.reduce((sum, p) => sum + p.valuePlnMinor, 0);
 
   const monthlyExpenses = getSetting<number>('monthlyExpensesPlnMinor', 0);
   const targetMonths = getSetting<number>('emergencyFundMonths', 6);
   const target = monthlyExpenses * targetMonths;
 
-  if (funds.length === 0) {
+  if (funds.length === 0 && flagged.length === 0) {
     return {
       configured: false,
       currentPlnMinor: 0,
@@ -111,14 +132,23 @@ export function emergencyFundStatus(): EmergencyFundStatus {
       coveredMonths: null,
       completionBp: null,
       portfolioNames: [],
+      instrumentSymbols: [],
     };
   }
 
   const ids = funds.map((p) => p.id);
-  const { positions, cashByPortfolio } = buildPositions(ids);
-  const current =
-    positions.reduce((sum, p) => sum + p.valuePlnMinor, 0) +
-    [...cashByPortfolio.values()].reduce((sum, v) => sum + v, 0);
+  const fromPortfolios =
+    ids.length > 0
+      ? (() => {
+          const { positions, cashByPortfolio } = buildPositions(ids);
+          return (
+            positions.reduce((sum, p) => sum + p.valuePlnMinor, 0) +
+            [...cashByPortfolio.values()].reduce((sum, v) => sum + v, 0)
+          );
+        })()
+      : 0;
+
+  const current = fromPortfolios + flaggedValue;
 
   return {
     configured: true,
@@ -128,6 +158,7 @@ export function emergencyFundStatus(): EmergencyFundStatus {
     targetMonths,
     coveredMonths: monthlyExpenses > 0 ? Math.round((current / monthlyExpenses) * 10) / 10 : null,
     completionBp: target > 0 ? Math.min(Math.round((current / target) * 10_000), 20_000) : null,
+    instrumentSymbols: flagged.map((p) => p.instrument.symbol),
     portfolioNames: funds.map((p) => p.name),
   };
 }

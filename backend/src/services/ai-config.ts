@@ -17,7 +17,17 @@ import { getSetting, setSetting } from './settings.js';
 export const AI_PROVIDERS = ['anthropic', 'openai'] as const;
 export type AiProvider = (typeof AI_PROVIDERS)[number];
 
-export const AI_FEATURES = ['news', 'insights', 'rebalanceHints'] as const;
+export const AI_FEATURES = [
+  'news',
+  'insights',
+  'rebalanceHints',
+  'monthlySummary',
+  'priceMoves',
+  'purchaseCheck',
+  'documentSummary',
+  'taxAssistant',
+  'importMapping',
+] as const;
 export type AiFeature = (typeof AI_FEATURES)[number];
 
 export interface AiFeatureInfo {
@@ -50,6 +60,56 @@ export const AI_FEATURE_INFO: Record<AiFeature, AiFeatureInfo> = {
     dataSent: 'Klasy aktywów, ich udziały procentowe i cele. Bez kwot i bez nazw instrumentów.',
     description: 'Komentuje odchylenia od alokacji docelowej. Nie proponuje konkretnych transakcji.',
   },
+  monthlySummary: {
+    key: 'monthlySummary',
+    label: 'Podsumowanie miesiąca',
+    dataSent:
+      'Zmiana wartości portfela, kwota dopłat, liczba transakcji, dywidendy oraz symbole i procentowe ' +
+      'zmiany kursów największych ruchów. Bez listy transakcji i bez wielkości pozycji.',
+    description:
+      'Opisuje zamknięty miesiąc w kilku zdaniach: co się zmieniło, skąd wynik i na co zwrócić uwagę dalej.',
+  },
+  priceMoves: {
+    key: 'priceMoves',
+    label: 'Wyjaśnianie ruchów cen',
+    dataSent:
+      'Nazwa instrumentu, procentowa zmiana kursu z dwóch tygodni i nagłówki wiadomości z tego okresu. ' +
+      'Bez wielkości pozycji i bez kwot.',
+    description:
+      'Zestawia ruch kursu z wiadomościami i rozróżnia zbieżność w czasie od przyczyny. Nie prognozuje kierunku.',
+  },
+  purchaseCheck: {
+    key: 'purchaseCheck',
+    label: 'Kontrola przed zakupem',
+    dataSent:
+      'Symbol rozważanego instrumentu, kwota zakupu, wartość portfela oraz udziały klasy aktywów, ' +
+      'sektora i regionu przed zakupem i po nim.',
+    description:
+      'Pokazuje, co planowany zakup zrobi ze strukturą portfela. Nie mówi „kup" ani „nie kupuj".',
+  },
+  documentSummary: {
+    key: 'documentSummary',
+    label: 'Streszczanie dokumentów',
+    dataSent: 'Wyłącznie tekst, który sam wkleisz. Nic z Twojego portfela.',
+    description:
+      'Streszcza po polsku raport okresowy, komunikat bieżący albo prospekt funduszu — z liczbami, ' +
+      'zmianami i ryzykami wskazanymi przez samą spółkę.',
+  },
+  taxAssistant: {
+    key: 'taxAssistant',
+    label: 'Asystent podatkowy',
+    dataSent:
+      'Zagregowane kwoty z Twojego zestawienia PIT-38 za wybrany rok: dochód, podatek, dywidendy ' +
+      'i nazwy portfeli zwolnionych. Bez listy transakcji.',
+    description: 'Odpowiada na pytania o Twoje konkretne zestawienie i tłumaczy, skąd biorą się kwoty.',
+  },
+  importMapping: {
+    key: 'importMapping',
+    label: 'Rozpoznawanie formatu importu',
+    dataSent: 'Nagłówki kolumn i do pięciu przykładowych wierszy z importowanego pliku.',
+    description:
+      'Podpowiada mapowanie kolumn nieznanego pliku CSV lub XLSX, żeby nie trzeba było dopisywać parsera.',
+  },
 };
 
 /** Modele sugerowane w interfejsie. Można wpisać dowolny inny identyfikator. */
@@ -77,6 +137,12 @@ const DEFAULT_FEATURES: Record<AiFeature, boolean> = {
   news: false,
   insights: false,
   rebalanceHints: false,
+  monthlySummary: false,
+  priceMoves: false,
+  purchaseCheck: false,
+  documentSummary: false,
+  taxAssistant: false,
+  importMapping: false,
 };
 
 export function getAiSettings(): AiSettings {

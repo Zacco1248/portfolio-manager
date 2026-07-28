@@ -97,6 +97,103 @@ export function Help() {
         </div>
       </Card>
 
+      <Card title="Poduszka finansowa">
+        <div className="space-y-3 p-4 pt-2 text-sm">
+          <p className="text-content-secondary">
+            Poduszkę wskazujesz na dwa sposoby i oba liczą się jednocześnie. Aplikacja sumuje je i porównuje
+            z celem, który ustawiasz jako liczbę miesięcy wydatków (Ustawienia → miesięczne wydatki i liczba miesięcy).
+          </p>
+
+          <Item title="Całym portfelem">
+            Dla środków trzymanych osobno — konto oszczędnościowe, lokata, gotówka. Załóż portfel, zaznacz mu
+            w Ustawieniach „poduszka finansowa" i zaksięguj stan jedną transakcją typu <em>Wpłata</em>.
+            Dopisane odsetki wprowadzasz typem <em>Odsetki</em> — dzięki temu policzy się też ich stopa zwrotu.
+          </Item>
+
+          <Item title="Pojedynczymi pozycjami">
+            Dla instrumentów leżących w portfelu inwestycyjnym. Wejdź w pozycję z listy, na karcie „Klasyfikacja"
+            zaznacz „Wlicza się do poduszki finansowej". Nic nie trzeba przenosić — historia i FIFO zostają nietknięte.
+          </Item>
+
+          <Item title="Przykład">
+            Wydatki 4 000 zł/mies., cel 6 miesięcy, czyli 24 000 zł. Masz konto oszczędnościowe na 9 000 zł
+            (osobny portfel z flagą) i obligacje COI za 12 000 zł w portfelu wspólnym (pozycja zaznaczona ręcznie).
+            Poduszka to 21 000 zł, pokrycie 5,3 miesiąca, realizacja celu 88%. Akcje z tego samego portfela
+            nie są liczone, bo nie mają zaznaczonej flagi.
+          </Item>
+
+          <Item title="Co wliczać, a czego nie">
+            Wliczaj to, co odzyskasz w dzień–dwa bez straty: konto oszczędnościowe, lokatę z niską karą,
+            obligacje TOS i COI (wykup kosztuje 0,70 zł od sztuki). EDO raczej nie — przedterminowy wykup
+            zjada narosłe odsetki, a właśnie one są tam całym sensem. Akcji, ETF-ów i krypto nie wliczaj
+            niezależnie od płynności: poduszka ma być pewna wtedy, kiedy rynek nie jest, a te rzeczy tanieją
+            dokładnie wtedy, gdy człowiek traci pracę.
+          </Item>
+        </div>
+      </Card>
+
+      <Card title="Co wychodzi na zewnątrz">
+        <div className="space-y-3 p-4 pt-2 text-sm">
+          <p className="text-content-secondary">
+            Baza, transakcje i wszystkie wyliczenia są wyłącznie na Twoim serwerze. Aplikacja nie ma telemetrii
+            ani zewnętrznych zasobów we froncie. Do internetu odzywa się jednak po dane rynkowe — także przy
+            całkowicie wyłączonym AI.
+          </p>
+
+          <Item title="Zawsze, niezależnie od ustawień AI">
+            <strong>Yahoo Finance</strong> — tickery instrumentów, które masz w portfelu.{' '}
+            <strong>NBP</strong> — kursy walut, zapytanie bez żadnych Twoich danych.{' '}
+            <strong>CoinGecko</strong> — nazwy kryptowalut.{' '}
+            <strong>Kanały RSS</strong> (PAP, Puls Biznesu i pozostałe) — pobierane w całości, bez wysyłania czegokolwiek.
+            Wychodzą więc <em>nazwy instrumentów</em>, nigdy stany posiadania, kwoty, transakcje ani wyniki.
+            Zapytania idą z serwera, nie z przeglądarki.
+          </Item>
+
+          <Item title="Model językowy — tylko po świadomym włączeniu">
+            Bez klucza w <code>.env</code> i bez zaznaczenia konkretnej funkcji do dostawcy modelu nie idzie nic.
+            Sama obecność klucza nie wystarcza. Każda funkcja jest osobnym przełącznikiem i przy każdej widzisz
+            w Ustawieniach dokładny zakres wysyłanych danych — jedne dostają tylko udziały procentowe,
+            inne kwoty zagregowane, streszczanie dokumentów wyłącznie tekst, który sam wkleisz.
+          </Item>
+
+          <Item title="Telegram — jedyne miejsce z kwotami">
+            Po skonfigurowaniu powiadomień treść alertów idzie przez serwery Telegrama i tam znajdą się konkretne
+            liczby. Bez konfiguracji funkcja jest wyłączona.
+          </Item>
+
+          <Item title="Czego nie ma">
+            Żadnych kont w chmurze, synchronizacji, kopii zapasowych na zewnątrz ani analityki użycia.
+            Kopię zapasową robisz sam, kopiując katalog <code>./data</code>.
+          </Item>
+        </div>
+      </Card>
+
+      <Card title="Co potrafi asystent">
+        <div className="space-y-3 p-4 pt-2 text-sm">
+          <p className="text-content-secondary">
+            Wszystkie funkcje modelu działają tak samo: liczby powstają lokalnie z bazy, model dostaje gotowe
+            wnioski i układa z nich zdania. Wyłączenie AI odbiera komentarz, nie odbiera danych.
+            Żadna z nich nie wydaje rekomendacji inwestycyjnych.
+          </p>
+
+          <Item title="Zakładka Asystent">
+            <strong>Podsumowanie miesiąca</strong> — co się zmieniło, ile z tego to wynik, a ile dopłaty.{' '}
+            <strong>Kontrola przed zakupem</strong> — wpisujesz instrument i kwotę, dostajesz wpływ na udziały
+            klasy, sektora i regionu wraz z ostrzeżeniami o koncentracji.{' '}
+            <strong>Asystent podatkowy</strong> — pytania o Twoje konkretne zestawienie PIT-38.{' '}
+            <strong>Streszczanie dokumentów</strong> — wklejasz raport okresowy albo prospekt, dostajesz
+            streszczenie po polsku z liczbami i ryzykami wskazanymi przez samą spółkę.
+          </Item>
+
+          <Item title="W innych miejscach">
+            Na karcie instrumentu <strong>„Dlaczego kurs się ruszył"</strong> zestawia zmianę z dwóch tygodni
+            z wiadomościami z tego okresu — i mówi wprost, kiedy nagłówki ruchu nie tłumaczą. W Aktualnościach
+            streszczenia i ocena wydźwięku, w Rebalansie kierunki uzupełnienia portfela, w Postępach komentarz
+            do podsumowania, w Imporcie podpowiedź mapowania kolumn nieznanego pliku.
+          </Item>
+        </div>
+      </Card>
+
       <Card title="Co działa w tle">
         <ul className="space-y-1.5 p-4 pt-2 text-sm">
           <Cron when="co 15 minut, w godzinach sesji">odświeżanie cen instrumentów</Cron>

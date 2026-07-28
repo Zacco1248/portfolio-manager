@@ -76,6 +76,8 @@ export function InstrumentDetail() {
 
       <ClassificationCard instrument={instrument} onSaved={reload} />
 
+      <PriceMoveCard instrumentId={instrumentId} />
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile label="RSI (14)" value={state.rsi === null ? '—' : state.rsi.toFixed(1)} tone={rsiTone(state.rsiZone)} />
         <StatTile
@@ -200,6 +202,76 @@ export function InstrumentDetail() {
 }
 
 /**
+ * Zestawienie ruchu kursu z wiadomościami z tego samego okresu.
+ *
+ * Świadomie ładowane na żądanie, nie przy wejściu na stronę: to jedyne miejsce
+ * w aplikacji, gdzie treść wiadomości trafia do modelu, więc wywołanie ma być
+ * decyzją użytkownika, a nie efektem ubocznym otwarcia zakładki.
+ */
+function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
+  const [state, setState] = useState<{
+    busy: boolean;
+    result: Awaited<ReturnType<typeof api.assist.priceMove>> | null;
+  }>({ busy: false, result: null });
+
+  const run = async () => {
+    setState({ busy: true, result: null });
+    try {
+      setState({ busy: false, result: await api.assist.priceMove(instrumentId) });
+    } catch {
+      setState({ busy: false, result: null });
+    }
+  };
+
+  return (
+    <Card
+      title="Dlaczego kurs się ruszył"
+      action={
+        <button type="button" className="btn btn-ghost text-2xs" disabled={state.busy} onClick={() => void run()}>
+          {state.busy ? 'Sprawdzam…' : 'Sprawdź'}
+        </button>
+      }
+    >
+      {!state.result ? (
+        <p className="px-4 pb-4 pt-2 text-2xs text-content-muted">
+          Zestawia zmianę kursu z ostatnich dwóch tygodni z wiadomościami z tego samego okresu.
+          Wymaga włączonej funkcji „Wyjaśnianie ruchów cen" w Ustawieniach.
+        </p>
+      ) : (
+        <>
+          {state.result.data && (
+            <div className="px-4 pb-2 pt-2">
+              <div className="text-2xs text-content-muted">
+                Zmiana przez {state.result.data.days} dni:{' '}
+                <span className="font-medium text-content-secondary">
+                  {state.result.data.changeBp === null
+                    ? 'brak notowań'
+                    : `${state.result.data.changeBp > 0 ? '+' : ''}${(state.result.data.changeBp / 100).toFixed(2)}%`}
+                </span>
+                {' · '}
+                {state.result.data.headlines.length} wiadomości w tym okresie
+              </div>
+            </div>
+          )}
+          {state.result.text ? (
+            <p className="whitespace-pre-wrap border-t border-surface-border px-4 py-3 text-sm leading-relaxed text-content-secondary">
+              {state.result.text}
+            </p>
+          ) : (
+            <p className="border-t border-surface-border px-4 py-3 text-2xs text-content-muted">
+              {state.result.unavailableReason ?? 'Brak komentarza.'}
+            </p>
+          )}
+          <p className="border-t border-surface-border px-4 py-2 text-2xs text-content-muted">
+            {state.result.disclaimer}
+          </p>
+        </>
+      )}
+    </Card>
+  );
+}
+
+/**
  * Ręczna korekta klasyfikacji.
  *
  * Automat rozpoznaje sektor i kraj tylko dla instrumentów, które ma w bazie
@@ -211,7 +283,7 @@ function ClassificationCard({
   instrument,
   onSaved,
 }: {
-  instrument: { id: number; sector: string | null; country: string | null; assetClass: string };
+  instrument: { id: number; sector: string | null; country: string | null; assetClass: string; emergencyFund?: boolean };
   onSaved: () => void;
 }) {
   const [sector, setSector] = useState(instrument.sector ?? '');
@@ -275,6 +347,18 @@ function ClassificationCard({
         <button type="button" className="btn btn-primary" disabled={!dirty} onClick={() => void save()}>
           Zapisz
         </button>
+        <label className="flex items-center gap-2 text-2xs text-content-secondary">
+          <input
+            type="checkbox"
+            checked={instrument.emergencyFund === true}
+            onChange={(e) =>
+              void api.instruments
+                .update(instrument.id, { emergencyFund: e.target.checked })
+                .then(onSaved)
+            }
+          />
+          Wlicza się do poduszki finansowej
+        </label>
         {status && <span className="text-2xs text-content-muted">{status}</span>}
       </div>
 

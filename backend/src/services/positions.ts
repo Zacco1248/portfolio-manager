@@ -34,6 +34,7 @@ export function toInstrumentDto(row: InstrumentRow): Instrument {
     provider: row.provider,
     providerSymbol: row.providerSymbol,
     unit: row.unit,
+    emergencyFund: row.emergencyFund,
   };
 }
 
