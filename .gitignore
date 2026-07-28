@@ -39,3 +39,6 @@ coverage/
 
 # Lokalna konfiguracja Claude Code (zawiera adresy hostów)
 .claude/
+
+# Katalogi robocze
+backend/tmp/
