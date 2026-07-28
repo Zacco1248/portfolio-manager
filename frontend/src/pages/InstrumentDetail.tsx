@@ -364,9 +364,9 @@ function HeadlineList({ headlines }: { headlines: PriceMoveFacts['headlines'] })
       {open && (
         <ul className="mt-1 space-y-1">
           {headlines.map((headline, index) => (
-            <li key={index} className="flex gap-2 text-2xs">
-              <span className="tabular w-20 shrink-0 text-content-muted">{formatDate(headline.publishedAt)}</span>
-              <span className="text-content-secondary">
+            <li key={index} className="flex flex-wrap gap-x-2 text-2xs">
+              <span className="tabular shrink-0 text-content-muted">{formatDate(headline.publishedAt)}</span>
+              <span className="min-w-0 flex-1 break-words text-content-secondary">
                 {headline.title}
                 <span className="ml-1 text-content-muted">
                   ({headline.source}
@@ -403,9 +403,9 @@ function ContextList({ entries }: { entries: PriceMoveFacts['context'] }) {
       {open && (
         <ul className="mt-1 space-y-1">
           {entries.map((entry, index) => (
-            <li key={index} className="flex gap-2 text-2xs">
-              <span className="tabular w-20 shrink-0 text-content-muted">{formatDate(entry.publishedAt)}</span>
-              <span className="text-content-secondary">
+            <li key={index} className="flex flex-wrap gap-x-2 text-2xs">
+              <span className="tabular shrink-0 text-content-muted">{formatDate(entry.publishedAt)}</span>
+              <span className="min-w-0 flex-1 break-words text-content-secondary">
                 {entry.policy && <span className="mr-1 text-warn">[władze]</span>}
                 {entry.title}
                 <span className="ml-1 text-content-muted">({entry.source})</span>

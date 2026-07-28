@@ -522,6 +522,8 @@ export interface ResearchSnapshot {
       url: string;
     }[];
     counts: Record<string, number>;
+    upgrades: number;
+    downgrades: number;
     scoreAvg: number | null;
     medianTargetE8: number | null;
     upsideBp: number | null;

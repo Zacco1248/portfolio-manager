@@ -210,9 +210,9 @@ function ResearchCard({ instrumentId, portfolioId }: { instrumentId: number; por
         {snapshot.signals.length > 0 && (
           <ul className="space-y-1 border-t border-surface-border px-4 py-3">
             {snapshot.signals.map((signal, index) => (
-              <li key={index} className="flex gap-2 text-2xs">
-                <span className="tabular w-20 shrink-0 text-content-muted">{formatDate(signal.date)}</span>
-                <span className="text-content-secondary">
+              <li key={index} className="flex flex-wrap gap-x-2 text-2xs">
+                <span className="tabular shrink-0 text-content-muted">{formatDate(signal.date)}</span>
+                <span className="min-w-0 flex-1 break-words text-content-secondary">
                   <span className="font-medium">{signal.label}</span> — {signal.detail}
                 </span>
               </li>
@@ -231,13 +231,13 @@ function ResearchCard({ instrumentId, portfolioId }: { instrumentId: number; por
         <Card title="Ostatnie wiadomości">
           <ul className="divide-y divide-surface-border">
             {snapshot.news.map((item, index) => (
-              <li key={index} className="flex gap-2 px-4 py-2 text-2xs">
-                <span className="tabular w-20 shrink-0 text-content-muted">{formatDate(item.publishedAt)}</span>
+              <li key={index} className="flex flex-wrap gap-x-2 px-4 py-2 text-2xs">
+                <span className="tabular shrink-0 text-content-muted">{formatDate(item.publishedAt)}</span>
                 <a
                   href={item.url}
                   target="_blank"
                   rel="noreferrer noopener"
-                  className="text-content-secondary hover:text-accent"
+                  className="min-w-0 flex-1 break-words text-content-secondary hover:text-accent"
                 >
                   {item.title}
                 </a>

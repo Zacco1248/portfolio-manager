@@ -6,7 +6,7 @@ import { analystRatings, instruments } from '../db/schema.js';
 import type { InstrumentRow } from '../db/schema.js';
 import { addDays, today } from '../lib/dates.js';
 import { errorMessage } from '../lib/errors.js';
-import { stripPublisher } from '../lib/headlines.js';
+import { mentionsCompany, stripPublisher } from '../lib/headlines.js';
 import { fetchText } from '../lib/http-client.js';
 import { createLogger } from '../lib/logger.js';
 import { parseFeed } from '../lib/rss.js';
@@ -111,9 +111,15 @@ export function parseRecommendation(title: string, summary?: string | null): Par
     ? Math.round(Number(priceMatch[1]!.replace(',', '.')) * 100_000_000)
     : null;
 
-  const direction = /podwyższ|podnios|w górę|podnieś/i.test(text)
+  /*
+   * Kierunek zmiany bywa jedyną konkretną informacją w nagłówku. Polskie
+   * serwisy trzymają cenę docelową za progiem kliknięcia („Jaka cena
+   * docelowa?"), ale samo „podniósł rekomendację" albo „obniżył wycenę"
+   * piszą wprost — i to też jest sygnał wart odnotowania.
+   */
+  const direction = /podwyższ|podni[oó]s|podnosi|w górę|podnieś|wyższa (?:cena|wycena)/i.test(text)
     ? 'up'
-    : /obniż|w dół|ścią|scina/i.test(text)
+    : /obniż|w dół|ścina|niższa (?:cena|wycena)/i.test(text)
       ? 'down'
       : null;
 
@@ -136,20 +142,55 @@ const idHash = (value: string): string => createHash('sha256').update(value).dig
  */
 export async function fetchRecommendations(instrument: InstrumentRow): Promise<number> {
   const subject = instrument.name.replace(/\s+(S\.?A\.?|PLC|Inc\.?|Corp\.?)$/i, '').trim() || instrument.symbol;
-  const query = `${subject} rekomendacja OR "cena docelowa" OR wycena analitycy`;
-  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=pl&gl=PL&ceid=PL:pl`;
+
+  /*
+   * Dwa zapytania, bo szukamy dwóch różnych rzeczy. Pierwsze łapie samą
+   * rekomendację, drugie celuje w nagłówki z kwotą: „podniósł wycenę do 144 zł"
+   * ginęło w ogólnym zapytaniu wśród kilkudziesięciu tekstów bez liczb.
+   */
+  const queries = [
+    `${subject} rekomendacja OR "cena docelowa" OR wycena analitycy`,
+    `${subject} "cena docelowa" OR wycena zł podnosi OR obniża`,
+  ];
 
   let saved = 0;
+  const entries: { url: string; title: string; publishedAt: string; summary: string | null }[] = [];
+
+  for (const query of queries) {
+    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=pl&gl=PL&ceid=PL:pl`;
+    try {
+      entries.push(...parseFeed(await fetchText(url, { retries: 1, minIntervalMs: 800 })));
+    } catch (err) {
+      log.warn(`Rekomendacje ${instrument.symbol} nieudane: ${errorMessage(err)}`);
+    }
+  }
 
   try {
-    for (const entry of parseFeed(await fetchText(url, { retries: 1, minIntervalMs: 800 })).slice(0, 25)) {
-      const title = stripPublisher(entry.title);
-      if (!looksLikeRecommendation(title, entry.summary)) continue;
+    /*
+     * Kolejność ma znaczenie: najpierw odsiewamy, dopiero potem ograniczamy
+     * liczbę. Wcześniej brałem pierwsze 25 pozycji kanału i dopiero je
+     * filtrowałem, więc jedyny nagłówek z ceną docelową bywał odcinany przez
+     * recenzje innych spółek stojące wyżej w wynikach.
+     *
+     * Sprawdzenie nazwy jest tu konieczne mimo celowanego zapytania:
+     * wyszukiwarka zwraca zbiorcze przeglądy rekomendacji dla całej giełdy,
+     * przez co „DM BOŚ obniżył wycenę akcji Grupy Azoty do 15 zł" lądowało
+     * jako wycena Orlenu.
+     */
+    const relevant = entries
+      .map((entry) => ({ entry, title: stripPublisher(entry.title) }))
+      .filter(({ title }) => mentionsCompany(title, instrument))
+      .filter(({ entry, title }) => looksLikeRecommendation(title, entry.summary))
+      .slice(0, 30);
 
+    for (const { entry, title } of relevant) {
       const parsed = parseRecommendation(title, entry.summary);
-      // Sam fakt, że tekst wspomina analityków, to za mało — bez zalecenia
-      // albo ceny docelowej nie ma czego zapisywać.
-      if (parsed.rating === null && parsed.targetPriceE8 === null) continue;
+      /*
+       * Sam fakt, że tekst wspomina analityków, to za mało. Zapisujemy, gdy
+       * jest zalecenie, cena docelowa albo przynajmniej kierunek zmiany —
+       * „podniósł rekomendację dla Orlenu" niesie treść, choć nie podaje kwoty.
+       */
+      if (parsed.rating === null && parsed.targetPriceE8 === null && parsed.direction === null) continue;
 
       const result = db
         .insert(analystRatings)
@@ -177,6 +218,7 @@ export async function fetchRecommendations(instrument: InstrumentRow): Promise<n
   return saved;
 }
 
+
 export interface RatingEntry {
   date: string;
   broker: string | null;
@@ -193,6 +235,9 @@ export interface RatingConsensus {
   counts: Record<string, number>;
   /** Uśredniony kierunek: dodatni = przewaga zaleceń kupna. */
   scoreAvg: number | null;
+  /** Podwyższenia i obniżki rekomendacji lub wyceny w oknie. */
+  upgrades: number;
+  downgrades: number;
   /** Mediana ceny docelowej — odporniejsza na pojedynczą skrajną wycenę niż średnia. */
   medianTargetE8: number | null;
   /** Potencjał wobec bieżącej ceny, w punktach bazowych. */
@@ -246,6 +291,8 @@ export function ratingConsensus(instrumentId: number, currentPriceE8: number | n
   return {
     entries,
     counts,
+    upgrades: entries.filter((entry) => entry.direction === 'up').length,
+    downgrades: entries.filter((entry) => entry.direction === 'down').length,
     scoreAvg: scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null,
     medianTargetE8: median,
     upsideBp:

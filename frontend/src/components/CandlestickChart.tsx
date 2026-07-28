@@ -83,6 +83,9 @@ export function CandlestickChart({
             axisLine={false}
             tickLine={false}
             width={56}
+            // Bez formatowania Recharts wypisuje pełną precyzję zmiennoprzecinkową
+            // („85.498236"), co przy wąskiej osi zlewa się w nieczytelny ciąg cyfr.
+            tickFormatter={(value: number) => value.toFixed(value >= 100 ? 0 : 2)}
           />
           <Tooltip
             contentStyle={{

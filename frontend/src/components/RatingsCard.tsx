@@ -30,7 +30,11 @@ export function RatingsCard({ ratings }: { ratings: ResearchSnapshot['ratings'] 
             <Tile
               label="Mediana ceny docelowej"
               value={ratings.medianTargetE8 === null ? '—' : `${(ratings.medianTargetE8 / 1e8).toFixed(2)} zł`}
-              hint={ratings.medianTargetE8 === null ? 'nagłówki bez kwot' : undefined}
+              hint={
+                ratings.medianTargetE8 === null
+                  ? 'polskie serwisy rzadko podają kwotę w nagłówku'
+                  : `z ${ratings.entries.filter((e) => e.targetPriceE8).length} wycen`
+              }
             />
             <Tile
               label="Potencjał"
@@ -38,27 +42,35 @@ export function RatingsCard({ ratings }: { ratings: ResearchSnapshot['ratings'] 
               tone={ratings.upsideBp === null ? undefined : toneClass(ratings.upsideBp)}
               hint="Wobec bieżącego kursu"
             />
-            <Tile label="Liczba wycen" value={String(ratings.entries.filter((e) => e.targetPriceE8).length)} />
+            <Tile
+              label="Zmiany zaleceń"
+              value={`${ratings.upgrades} ↑ / ${ratings.downgrades} ↓`}
+              hint="Podwyższenia i obniżki"
+            />
           </div>
 
           <ul className="divide-y divide-surface-border border-t border-surface-border">
             {ratings.entries.slice(0, 8).map((entry, index) => (
-              <li key={index} className="flex flex-wrap items-baseline gap-2 px-4 py-2 text-2xs">
-                <span className="tabular w-20 shrink-0 text-content-muted">{formatDate(entry.date)}</span>
-                {entry.rating && <span className={`badge ${ratingClass(entry.rating)}`}>{entry.rating}</span>}
-                {entry.broker && <span className="font-medium">{entry.broker}</span>}
-                {entry.targetPriceE8 && (
-                  <span className="tabular text-content-secondary">
-                    {(entry.targetPriceE8 / 1e8).toFixed(2)} zł
-                    {entry.direction === 'up' && ' ↑'}
-                    {entry.direction === 'down' && ' ↓'}
-                  </span>
-                )}
+              <li key={index} className="px-4 py-2 text-2xs">
+                {/* Metadane w jednym wierszu, tytuł pod spodem — na wąskim ekranie
+                    obcinanie w jednej linii zostawiało z nagłówka dwa słowa. */}
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <span className="tabular text-content-muted">{formatDate(entry.date)}</span>
+                  {entry.rating && <span className={`badge ${ratingClass(entry.rating)}`}>{entry.rating}</span>}
+                  {entry.broker && <span className="font-medium">{entry.broker}</span>}
+                  {entry.targetPriceE8 && (
+                    <span className="tabular font-medium text-content-secondary">
+                      cel {(entry.targetPriceE8 / 1e8).toFixed(2)} zł
+                      {entry.direction === 'up' && ' ↑'}
+                      {entry.direction === 'down' && ' ↓'}
+                    </span>
+                  )}
+                </div>
                 <a
                   href={entry.url}
                   target="_blank"
                   rel="noreferrer noopener"
-                  className="min-w-0 flex-1 truncate text-content-muted hover:text-accent"
+                  className="mt-0.5 block break-words text-content-muted hover:text-accent"
                 >
                   {entry.title}
                 </a>

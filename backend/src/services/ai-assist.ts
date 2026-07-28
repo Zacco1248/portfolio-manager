@@ -4,7 +4,13 @@ import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { aiAnalyses, instruments, newsItems, pricesDaily, realizedGains, transactions } from '../db/schema.js';
 import { addDays, today } from '../lib/dates.js';
-import { headlineImportance, looksPolicyRelated, sectorContext, stripPublisher } from '../lib/headlines.js';
+import {
+  headlineImportance,
+  looksPolicyRelated,
+  mentionsCompany,
+  sectorContext,
+  stripPublisher,
+} from '../lib/headlines.js';
 import { errorMessage } from '../lib/errors.js';
 import { createLogger } from '../lib/logger.js';
 import { checkFeature } from './ai-config.js';
@@ -331,32 +337,14 @@ export interface PriceMoveFacts {
 /**
  * Czy nagłówek dotyczy tego instrumentu.
  *
- * Nazwy w bazie bywają rozbudowane („XTB S.A.", „iShares Core S&P 500 UCITS ETF"),
- * a w tytułach występuje sama nazwa własna. Bierzemy więc pierwszy człon nazwy
- * i goły ticker, oba przynajmniej trzyznakowe — krótsze dawałyby przypadkowe
- * trafienia w środku innych słów.
+ * Cienka nakładka na wspólną implementację — rekomendacje i wiadomości muszą
+ * rozstrzygać to tak samo, inaczej ten sam tekst raz jest o spółce, a raz nie.
  */
 export function mentionsInstrument(title: string, instrument: { symbol: string; name: string }): boolean {
-  const haystack = stripPublisher(title).toLowerCase();
-
-  const ticker = (instrument.symbol.split(':').pop() ?? instrument.symbol).split('.')[0]!.toLowerCase();
-  const firstWord = instrument.name.split(/[\s,.]+/)[0]?.toLowerCase() ?? '';
-
-  const needles = [ticker, firstWord].filter((needle) => needle.length >= 3);
-
-  /*
-   * Granica z lewej strony, żeby „PKO" nie trafiało w „pokoje". Z prawej
-   * dopuszczamy końcówkę fleksyjną: po polsku pisze się „Orlenu", „Orlenem",
-   * „Orlenowi" i bez tego wiadomość o spółce lądowała w otoczeniu branżowym.
-   */
-  return needles.some((needle) =>
-    new RegExp(`(^|[^a-z0-9])${escapeRegExp(needle)}[a-ząćęłńóśźż]{0,3}([^a-z0-9]|$)`, 'i').test(haystack),
-  );
+  return mentionsCompany(title, instrument);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+
 
 /**
  * Wiadomości z otoczenia spółki.

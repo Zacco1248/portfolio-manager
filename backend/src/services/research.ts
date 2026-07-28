@@ -93,8 +93,18 @@ export async function searchCompanies(query: string): Promise<
 }
 
 export async function buildResearch(instrumentId: number, portfolioId?: number): Promise<ResearchSnapshot | null> {
-  const instrument = db.select().from(instruments).where(eq(instruments.id, instrumentId)).get();
+  let instrument = db.select().from(instruments).where(eq(instruments.id, instrumentId)).get();
   if (!instrument) return null;
+
+  /*
+   * Sektor i kraj uzupełniamy tu, a nie tylko w zbiorczej klasyfikacji.
+   * Instrumenty dodane przed jej wprowadzeniem zostawały nieprzypisane aż do
+   * ręcznego uruchomienia, przez co karta spółki pokazywała „sektor
+   * nieprzypisany" mimo że dostawca zna odpowiedź.
+   */
+  if (!instrument.sector || !instrument.country) {
+    instrument = (await ensureClassified(instrument)) ?? instrument;
+  }
 
   let candles = readCandles(instrument.id);
 
@@ -327,4 +337,34 @@ export async function instrumentRatings(instrumentId: number): Promise<RatingCon
   }
 
   return consensus;
+}
+
+
+/**
+ * Uzupełnienie sektora i kraju pojedynczego instrumentu.
+ *
+ * Najpierw to, co wynika z samych danych, potem dopiero pytanie do dostawcy.
+ * Błąd sieci nie może wywrócić karty spółki, więc przy niepowodzeniu wracamy
+ * z niezmienionym wierszem.
+ */
+async function ensureClassified(instrument: InstrumentRow): Promise<InstrumentRow | null> {
+  const patch: Partial<InstrumentRow> = {};
+
+  const { classifyInstrument, localClassification } = await import('./classify.js');
+  const local = localClassification(instrument);
+  if (!instrument.sector && local.sector) patch.sector = local.sector;
+  if (!instrument.country && local.country) patch.country = local.country;
+
+  if (!patch.sector && !instrument.sector && instrument.assetClass !== 'bond' && instrument.assetClass !== 'cash') {
+    try {
+      const classification = await classifyInstrument(instrument);
+      if (classification.sector) patch.sector = classification.sector;
+    } catch (err) {
+      log.warn(`Klasyfikacja ${instrument.symbol} nieudana: ${errorMessage(err)}`);
+    }
+  }
+
+  if (Object.keys(patch).length === 0) return instrument;
+
+  return db.update(instruments).set(patch).where(eq(instruments.id, instrument.id)).returning().get();
 }

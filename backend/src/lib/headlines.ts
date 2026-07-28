@@ -221,3 +221,37 @@ export function looksPolicyRelated(title: string, summary?: string | null): bool
   const text = `${title} ${summary ?? ''}`.toLowerCase();
   return POLICY_TERMS.some((term) => text.includes(term));
 }
+
+/**
+ * Czy nagłówek dotyczy tej spółki.
+ *
+ * Trzy sposoby zapisu naraz, bo prasa używa każdego: ticker („XTB"), pierwszy
+ * człon nazwy („Orlen") i pełna nazwa bez formy prawnej („CD Projekt").
+ * Ten ostatni jest konieczny dla spółek dwuczłonowych — sam pierwszy wyraz
+ * bywa za krótki albo zbyt pospolity, a ticker w tekście w ogóle nie pada.
+ *
+ * Granica słowa obowiązuje z lewej strony, z prawej dopuszczamy końcówkę
+ * fleksyjną: „Orlenu", „CD Projektu", „Orlenem".
+ */
+export function mentionsCompany(title: string, instrument: { symbol: string; name: string }): boolean {
+  // Wydawcę odcinamy tutaj, a nie u wywołujących: „Akcje Alphabet wypadły
+  // z łask - XTB.com" to materiał XTB o Alphabecie, nie wiadomość o XTB.
+  const haystack = stripPublisher(title).toLowerCase();
+
+  const ticker = (instrument.symbol.split(':').pop() ?? instrument.symbol).split('.')[0]!.toLowerCase();
+  const cleanName = instrument.name
+    .replace(/\s+(S\.?A\.?|SA|PLC|Inc\.?|Corp\.?|N\.V\.|AG|Group)$/i, '')
+    .trim()
+    .toLowerCase();
+  const firstWord = cleanName.split(/[\s,.]+/)[0] ?? '';
+
+  const needles = [cleanName, ticker, firstWord].filter((needle) => needle.length >= 3);
+
+  return needles.some((needle) =>
+    new RegExp(`(^|[^a-z0-9])${escapeRegExp(needle)}[a-ząćęłńóśźż]{0,3}([^a-z0-9]|$)`, 'i').test(haystack),
+  );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
