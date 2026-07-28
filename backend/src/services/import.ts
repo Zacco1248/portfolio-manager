@@ -17,6 +17,7 @@ import type { ColumnMapping, ParsedBond, ParsedRow } from '../parsers/types.js';
 import { parserAliasSource } from '../parsers/types.js';
 import { resolveInstrument } from './instruments.js';
 import { importSnapshots } from './snapshots.js';
+import { upsertCpi } from './bonds.js';
 import {
   createTransaction,
   findByRowHash,
@@ -224,6 +225,13 @@ export async function previewImport(options: PreviewOptions): Promise<ImportPrev
     })
     .returning()
     .get();
+
+  // Odczyty inflacji zapisujemy od razu: nie są transakcjami, więc nie ma
+  // czego zatwierdzać, a bez nich obligacje indeksowane liczą tylko marżę.
+  if (parsed.cpi && parsed.cpi.length > 0) {
+    const saved = upsertCpi(parsed.cpi);
+    log.info(`Zapisano ${saved} odczytów inflacji`);
+  }
 
   // Warunki emisji obligacji przypisujemy do instrumentów po dacie zakupu —
   // bez nich obligacja stoi na nominale i nie nalicza odsetek.

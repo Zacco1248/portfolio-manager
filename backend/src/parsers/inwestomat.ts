@@ -9,6 +9,7 @@ import type {
   ImportParser,
   ParseResult,
   ParsedBond,
+  ParsedCpi,
   ParsedRow,
   ParsedSnapshot,
   ParserFileMeta,
@@ -28,6 +29,7 @@ const log = createLogger('parser:inwestomat');
 const TRANSACTIONS_SHEET = ['transakcje', 'transactions'];
 const HISTORY_SHEET = ['historia', 'history'];
 const BONDS_SHEET = ['obligacje', 'bonds'];
+const CPI_SHEET = ['inflacja', 'cpi'];
 
 /** Nagłówek w arkuszu → pole wewnętrzne. Dopasowanie bez znaków diakrytycznych. */
 const COLUMN_ALIASES: Record<string, string[]> = {
@@ -262,6 +264,45 @@ function readBonds(sheet: XlsxSheet): ParsedBond[] {
   return out;
 }
 
+/**
+ * Arkusz „Inflacja" to zrzut z Banku Danych Lokalnych GUS. Interesuje nas
+ * wyłącznie prezentacja „analogiczny miesiąc poprzedniego roku" — to ona jest
+ * podstawą indeksacji obligacji EDO i COI. Wartość jest indeksem, w którym
+ * 100 oznacza brak zmiany, więc inflacja to wartość pomniejszona o 100.
+ */
+function readCpi(sheet: XlsxSheet): ParsedCpi[] {
+  const labels = (sheet.rows[0] ?? []).map((cell) => fold(cellText(cell)));
+  const presentationCol = labels.findIndex((l) => l.startsWith('sposob prezentacji'));
+  const yearCol = labels.findIndex((l) => l === 'rok');
+  const monthCol = labels.findIndex((l) => l.startsWith('miesiac'));
+  const valueCol = labels.findIndex((l) => l.startsWith('wartosc'));
+
+  if (yearCol === -1 || monthCol === -1 || valueCol === -1) return [];
+
+  const out: ParsedCpi[] = [];
+
+  for (let r = 1; r < sheet.rows.length; r += 1) {
+    const row = sheet.rows[r] ?? [];
+
+    if (presentationCol !== -1) {
+      const presentation = fold(cellText(cellAt(row, presentationCol)));
+      // Pomijamy wariant „grudzień poprzedniego roku" — to inna miara.
+      if (!presentation.startsWith('analogiczny miesiac')) continue;
+    }
+
+    const year = Number(cellText(cellAt(row, yearCol)));
+    const month = Number(cellText(cellAt(row, monthCol)));
+    const index = Number(cellText(cellAt(row, valueCol)).replace(',', '.'));
+
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(index)) continue;
+    if (month < 1 || month > 12 || index <= 0) continue;
+
+    out.push({ year, month, cpiYoyPercent: Math.round((index - 100) * 100) / 100 });
+  }
+
+  return out;
+}
+
 export const inwestomatParser: ImportParser = {
   id: 'inwestomat-xlsx',
   name: 'Inwestomat — arkusz monitorowania inwestycji',
@@ -379,6 +420,14 @@ export const inwestomatParser: ImportParser = {
       );
     }
 
+    const cpiSheet = findSheet(sheets, CPI_SHEET);
+    const cpi = cpiSheet ? readCpi(cpiSheet) : [];
+    if (cpi.length > 0) {
+      notes.push(
+        `Odczytano ${cpi.length} miesięcznych odczytów inflacji — posłużą do indeksacji obligacji EDO i COI.`,
+      );
+    }
+
     const historySheet = findSheet(sheets, HISTORY_SHEET);
     const snapshots = historySheet ? readSnapshots(historySheet) : [];
     if (snapshots.length > 0) {
@@ -389,6 +438,6 @@ export const inwestomatParser: ImportParser = {
     }
 
     log.info(`Odczytano ${rows.length} transakcji z arkusza Inwestomatu`);
-    return { rows, detectedColumns: header.rawHeaders, snapshots, bonds, notes };
+    return { rows, detectedColumns: header.rawHeaders, snapshots, bonds, cpi, notes };
   },
 };

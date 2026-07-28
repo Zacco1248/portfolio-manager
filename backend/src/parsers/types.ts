@@ -52,10 +52,19 @@ export interface ParsedBond {
   count: number;
 }
 
+/** Odczyt inflacji rok do roku, w procentach. */
+export interface ParsedCpi {
+  year: number;
+  month: number;
+  cpiYoyPercent: number;
+}
+
 export interface ParseResult {
   rows: ParsedRow[];
   /** Warunki emisji obligacji, jeśli źródło je zawiera. */
   bonds?: ParsedBond[];
+  /** Odczyty inflacji — bez nich obligacje indeksowane liczą się z samej marży. */
+  cpi?: ParsedCpi[];
   /** Kolumny wykryte w pliku — potrzebne kreatorowi mapowania. */
   detectedColumns: string[];
   /** Historia wartości portfela, jeśli źródło ją zawiera (arkusz Inwestomatu). */
