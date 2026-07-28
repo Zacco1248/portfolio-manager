@@ -2,12 +2,12 @@ import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm';
 import { shareBp } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
-import { instruments, newsItems, pricesDaily, realizedGains, transactions } from '../db/schema.js';
+import { aiAnalyses, instruments, newsItems, pricesDaily, realizedGains, transactions } from '../db/schema.js';
 import { addDays, today } from '../lib/dates.js';
 import { errorMessage } from '../lib/errors.js';
 import { createLogger } from '../lib/logger.js';
 import { checkFeature } from './ai-config.js';
-import { complete } from './ai.js';
+import { completeWithMeta, estimateCostMicroUsd } from './ai.js';
 import { activePortfolioIds, buildPositions } from './positions.js';
 import { readHistory } from './snapshots.js';
 import { buildTaxReport } from './tax.js';
@@ -28,11 +28,21 @@ const log = createLogger('ai-assist');
 export const ASSIST_DISCLAIMER =
   'Materiał informacyjny wygenerowany automatycznie. Nie stanowi rekomendacji ani doradztwa inwestycyjnego.';
 
+export interface AssistUsage {
+  provider: string;
+  model: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /** Szacunkowy koszt w mikrodolarach. Orientacyjny — rozstrzyga panel dostawcy. */
+  costMicroUsd: number | null;
+}
+
 export interface AssistResult<T> {
   data: T;
   text: string | null;
   unavailableReason: string | null;
   disclaimer: string;
+  usage?: AssistUsage;
 }
 
 /**
@@ -52,16 +62,86 @@ async function withModel<T>(
   }
 
   try {
+    const meta = await completeWithMeta(prompt, payload, maxTokens);
     return {
       data,
-      text: await complete(prompt, payload, maxTokens),
-      unavailableReason: null,
+      text: meta.text,
+      unavailableReason: meta.text ? null : 'Model nie zwrócił treści.',
       disclaimer: ASSIST_DISCLAIMER,
+      usage: {
+        provider: meta.provider,
+        model: meta.model,
+        inputTokens: meta.inputTokens,
+        outputTokens: meta.outputTokens,
+        costMicroUsd: estimateCostMicroUsd(meta),
+      },
     };
   } catch (err) {
     log.warn(`${feature}: model nie odpowiedział — ${errorMessage(err)}`);
     return { data, text: null, unavailableReason: 'Model nie odpowiedział.', disclaimer: ASSIST_DISCLAIMER };
   }
+}
+
+/** Zapisanie odpowiedzi, żeby przetrwała odświeżenie strony. */
+function saveAnalysis(
+  kind: string,
+  result: AssistResult<unknown>,
+  context: { instrumentId?: number; portfolioId?: number; facts: unknown },
+): void {
+  if (!result.text || !result.usage) return;
+
+  db.insert(aiAnalyses)
+    .values({
+      kind,
+      instrumentId: context.instrumentId ?? null,
+      portfolioId: context.portfolioId ?? null,
+      provider: result.usage.provider,
+      model: result.usage.model,
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens,
+      costMicroUsd: result.usage.costMicroUsd,
+      facts: context.facts as Record<string, unknown>,
+      text: result.text,
+    })
+    .run();
+}
+
+export interface SavedAnalysis {
+  id: number;
+  kind: string;
+  instrumentId: number | null;
+  createdAt: string;
+  provider: string;
+  model: string;
+  costMicroUsd: number | null;
+  facts: Record<string, unknown> | null;
+  text: string;
+}
+
+/** Wcześniejsze analizy danego rodzaju, od najnowszej. */
+export function listAnalyses(kind?: string, instrumentId?: number, limit = 20): SavedAnalysis[] {
+  return db
+    .select()
+    .from(aiAnalyses)
+    .orderBy(desc(aiAnalyses.createdAt))
+    .all()
+    .filter((row) => (kind === undefined || row.kind === kind) && (instrumentId === undefined || row.instrumentId === instrumentId))
+    .slice(0, limit)
+    .map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      instrumentId: row.instrumentId,
+      createdAt: row.createdAt,
+      provider: row.provider,
+      model: row.model,
+      costMicroUsd: row.costMicroUsd,
+      facts: row.facts,
+      text: row.text,
+    }));
+}
+
+export function deleteAnalysis(id: number): void {
+  db.delete(aiAnalyses).where(eq(aiAnalyses.id, id)).run();
 }
 
 const pln = (minor: number): string => `${(minor / 100).toFixed(2)} zł`;
@@ -214,7 +294,9 @@ export async function monthlySummary(portfolioId: number | undefined, month?: st
     `Największe ruchy: ${facts.movers.map((m) => `${m.symbol} ${pct(m.changeBp)}`).join('; ') || 'brak danych'}`,
   ].join('\n');
 
-  return withModel('monthlySummary', facts, MONTHLY_PROMPT, payload);
+  const result = await withModel('monthlySummary', facts, MONTHLY_PROMPT, payload);
+  if (result.text) saveAnalysis('monthly_summary', result, { portfolioId, facts });
+  return result;
 }
 
 // ── Wyjaśnianie ruchu ceny ───────────────────────────────────
@@ -224,7 +306,33 @@ export interface PriceMoveFacts {
   name: string;
   changeBp: number | null;
   days: number;
-  headlines: { title: string; publishedAt: string; summary: string | null }[];
+  headlines: { title: string; publishedAt: string; summary: string | null; source: string; linked: boolean }[];
+  /** Ile wiadomości w ogóle zebrano w tym okresie — odróżnia brak newsów od braku dopasowania. */
+  newsInWindow: number;
+}
+
+/**
+ * Czy nagłówek dotyczy tego instrumentu.
+ *
+ * Nazwy w bazie bywają rozbudowane („XTB S.A.", „iShares Core S&P 500 UCITS ETF"),
+ * a w tytułach występuje sama nazwa własna. Bierzemy więc pierwszy człon nazwy
+ * i goły ticker, oba przynajmniej trzyznakowe — krótsze dawałyby przypadkowe
+ * trafienia w środku innych słów.
+ */
+export function mentionsInstrument(title: string, instrument: { symbol: string; name: string }): boolean {
+  const haystack = title.toLowerCase();
+
+  const ticker = (instrument.symbol.split(':').pop() ?? instrument.symbol).split('.')[0]!.toLowerCase();
+  const firstWord = instrument.name.split(/[\s,.]+/)[0]?.toLowerCase() ?? '';
+
+  const needles = [ticker, firstWord].filter((needle) => needle.length >= 3);
+
+  // Granice słowa, żeby „PKO" nie trafiało w „pokoje", a „XTB" tylko jako całość.
+  return needles.some((needle) => new RegExp(`(^|[^a-z0-9])${escapeRegExp(needle)}([^a-z0-9]|$)`, 'i').test(haystack));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** Okno, w którym szukamy przyczyn ruchu ceny. */
@@ -247,31 +355,68 @@ export function priceMoveFacts(instrumentId: number): PriceMoveFacts | null {
       ? Math.round((candles[candles.length - 1]!.closeE8 / candles[0]!.closeE8 - 1) * 10_000)
       : null;
 
-  const headlines = db
+  /*
+   * Wiadomości szukamy dwiema drogami. Powiązanie po instrumencie jest pewne,
+   * ale niepełne: adres artykułu jest w bazie unikalny, więc tekst opisujący
+   * kilka spółek przypina się tylko do tej, która trafiła tam pierwsza.
+   * Drugi przebieg łapie te przypisane gdzie indziej albo wcale, szukając
+   * nazwy i tickera w tytule.
+   */
+  const recent = db
     .select()
     .from(newsItems)
-    .where(and(eq(newsItems.instrumentId, instrumentId), gte(newsItems.publishedAt, from)))
+    .where(gte(newsItems.publishedAt, from))
     .orderBy(desc(newsItems.publishedAt))
-    .limit(12)
-    .all()
-    .map((item) => ({
-      title: item.title,
-      publishedAt: item.publishedAt.slice(0, 10),
-      summary: item.aiSummaryPl ?? item.rawSummary,
-    }));
+    .all();
 
-  return { symbol: instrument.symbol, name: instrument.name, changeBp, days: MOVE_WINDOW_DAYS, headlines };
+  const matches = recent.filter(
+    (item) => item.instrumentId === instrumentId || mentionsInstrument(item.title, instrument),
+  );
+
+  const headlines = matches.slice(0, 15).map((item) => ({
+    title: item.title,
+    publishedAt: item.publishedAt.slice(0, 10),
+    summary: item.aiSummaryPl ?? item.rawSummary,
+    source: item.source,
+    /** Skąd wzięło się dopasowanie — przydaje się przy diagnozowaniu pustych wyników. */
+    linked: item.instrumentId === instrumentId,
+  }));
+
+  return {
+    symbol: instrument.symbol,
+    name: instrument.name,
+    changeBp,
+    days: MOVE_WINDOW_DAYS,
+    headlines,
+    newsInWindow: recent.length,
+  };
 }
 
-const MOVE_PROMPT = `Jesteś analitykiem tłumaczącym inwestorowi indywidualnemu, co dzieje się z kursem spółki.
+const MOVE_PROMPT = `Jesteś analitykiem tłumaczącym polskiemu inwestorowi indywidualnemu, co dzieje się z kursem spółki.
 
 Dostajesz zmianę kursu z ostatnich dwóch tygodni i nagłówki z tego samego okresu.
 
-Napisz po polsku 3-5 zdań: z czym zbiega się ten ruch według dostępnych nagłówków i czego z nich NIE wynika.
-Jeśli nagłówki nie tłumaczą ruchu, napisz to wprost — kursy zmieniają się też bez powodu w wiadomościach.
+Napisz po polsku 4-7 zdań, w tej kolejności:
 
-Zasady: rozróżniaj zbieżność w czasie od przyczyny i nazywaj to wprost. Nie prognozuj dalszego kierunku.
-Nie sugeruj kupna ani sprzedaży. Bez nagłówków i bez list punktowanych.`;
+1. Nazwij ruch: skala i czy jest duży jak na tę spółkę.
+2. Wskaż konkretne nagłówki, które mogą go tłumaczyć — cytuj ich treść, nie ograniczaj się do stwierdzenia,
+   że coś było. Jeśli nagłówki układają się w wątek (wyniki, zmiana w zarządzie, dane operacyjne, regulacje,
+   sytuacja całej branży), nazwij ten wątek.
+3. Oceń siłę powiązania: czy daty się zgadzają, czy to raczej tło niż wyzwalacz, czy ruch wyprzedził wiadomość.
+4. Podaj, co jeszcze mogło zadziałać, a czego w nagłówkach nie widać — wyniki konkurencji, dane makro,
+   nastroje na szerokim rynku, przepływy w funduszach, zmiany kursu walut przy spółkach z ekspozycją zagraniczną.
+5. Zakończ tym, co warto sprawdzić dalej: konkretne miejsce (raport bieżący, kalendarz publikacji, dane operacyjne),
+   a nie ogólnik „obserwować sytuację".
+
+Zasady:
+- Rozróżniaj zbieżność w czasie od przyczyny i nazywaj to wprost, ale nie zatrzymuj się na tym rozróżnieniu —
+  ono jest zastrzeżeniem, nie treścią odpowiedzi.
+- Jeśli nagłówków brak, nie pisz o tym pięciu zdań. Stwierdź to raz i przejdź do tego, co typowo stoi
+  za ruchem tej wielkości bez komunikatów spółki, oraz gdzie inwestor może szukać dalej.
+- Nie prognozuj dalszego kierunku kursu i nie sugeruj kupna ani sprzedaży.
+- Piszesz zwartym tekstem ciągłym, bez nagłówków, bez numeracji i bez list punktowanych.
+- Konkret zamiast asekuracji. Zdanie „to jedynie hipotezy" wnosi mniej niż wskazanie, która hipoteza jest
+  najbardziej prawdopodobna i dlaczego.`;
 
 export async function explainPriceMove(instrumentId: number): Promise<AssistResult<PriceMoveFacts | null>> {
   const facts = priceMoveFacts(instrumentId);
@@ -285,10 +430,12 @@ export async function explainPriceMove(instrumentId: number): Promise<AssistResu
     'Nagłówki:',
     ...(facts.headlines.length > 0
       ? facts.headlines.map((h) => `- ${h.publishedAt}: ${h.title}${h.summary ? ` — ${h.summary.slice(0, 200)}` : ''}`)
-      : ['- brak wiadomości w tym okresie']),
+      : ['- brak wiadomości dotyczących tej spółki w tym okresie']),
   ].join('\n');
 
-  return withModel('priceMoves', facts, MOVE_PROMPT, payload);
+  const result = await withModel('priceMoves', facts, MOVE_PROMPT, payload);
+  if (result.text) saveAnalysis('price_move', result, { instrumentId, facts });
+  return result;
 }
 
 // ── Kontrola przed zakupem ───────────────────────────────────
@@ -415,7 +562,9 @@ export async function purchaseCheck(
     `Ostrzeżenia: ${facts.warnings.join(' ') || 'brak'}`,
   ].join('\n');
 
-  return withModel('purchaseCheck', facts, PURCHASE_PROMPT, payload);
+  const result = await withModel('purchaseCheck', facts, PURCHASE_PROMPT, payload);
+  if (result.text) saveAnalysis('purchase_check', result, { portfolioId, facts });
+  return result;
 }
 
 // ── Streszczanie dokumentów ──────────────────────────────────
@@ -502,7 +651,9 @@ export async function taxAssistant(
     `Pytanie użytkownika: ${question}`,
   ].join('\n');
 
-  return withModel('taxAssistant', facts, TAX_PROMPT, payload, 1500);
+  const result = await withModel('taxAssistant', facts, TAX_PROMPT, payload, 1500);
+  if (result.text) saveAnalysis('tax', result, { portfolioId, facts });
+  return result;
 }
 
 // ── Rozpoznawanie formatu importu ────────────────────────────

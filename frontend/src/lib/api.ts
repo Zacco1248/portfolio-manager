@@ -223,6 +223,9 @@ export const api = {
       post<AssistResult<{ characters: number; truncated: boolean }>>('/assist/document', { text }),
     tax: (body: { portfolioId?: number; year: number; question: string }) =>
       post<AssistResult<TaxAssistantFacts>>('/assist/tax', body),
+    history: (params: { kind?: string; instrumentId?: number; limit?: number }) =>
+      get<SavedAnalysis[]>(`/assist/history${query(params)}`),
+    removeHistory: (id: number) => del<{ ok: boolean }>(`/assist/history/${id}`),
     importMapping: (headers: string[], samples: string[][]) =>
       post<AssistResult<{ headers: string[]; sampleCount: number }>>('/assist/import-mapping', { headers, samples }),
   },
@@ -389,6 +392,26 @@ export interface AssistResult<T> {
   text: string | null;
   unavailableReason: string | null;
   disclaimer: string;
+  usage?: {
+    provider: string;
+    model: string;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    costMicroUsd: number | null;
+  };
+}
+
+/** Zapisana odpowiedź asystenta — przetrwa odświeżenie strony. */
+export interface SavedAnalysis {
+  id: number;
+  kind: string;
+  instrumentId: number | null;
+  createdAt: string;
+  provider: string;
+  model: string;
+  costMicroUsd: number | null;
+  facts: Record<string, unknown> | null;
+  text: string;
 }
 
 export interface MonthlyFacts {
@@ -409,7 +432,8 @@ export interface PriceMoveFacts {
   name: string;
   changeBp: number | null;
   days: number;
-  headlines: { title: string; publishedAt: string; summary: string | null }[];
+  headlines: { title: string; publishedAt: string; summary: string | null; source: string; linked: boolean }[];
+  newsInWindow: number;
 }
 
 export interface PurchaseCheckFacts {

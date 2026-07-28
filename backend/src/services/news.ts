@@ -31,6 +31,23 @@ interface FeedSource {
   urlFor(instrument: InstrumentRow): string | null;
 }
 
+/**
+ * Czy instrument jest notowany w Polsce.
+ *
+ * Decyduje o pobraniu zbiorczych kanałów polskich serwisów. Samo pole `exchange`
+ * nie wystarcza: wyciąg brokera nie zawsze podaje giełdę, więc instrument
+ * zaimportowany z historii transakcji miał je puste i wypadał ze wszystkich
+ * krajowych źródeł — zostawał mu tylko anglojęzyczny kanał Yahoo, który dla
+ * spółek z GPW bywa pusty.
+ */
+function isPolish(instrument: InstrumentRow): boolean {
+  if (instrument.exchange === 'WSE' || instrument.exchange === 'GPW') return true;
+  if (instrument.country === 'Polska') return true;
+  if (instrument.symbol.toUpperCase().startsWith('WSE:')) return true;
+  if (instrument.symbol.toUpperCase().endsWith('.WA')) return true;
+  return instrument.currency === 'PLN' && instrument.assetClass === 'stock';
+}
+
 const SOURCES: FeedSource[] = [
   {
     id: 'yahoo',
@@ -42,24 +59,51 @@ const SOURCES: FeedSource[] = [
         : null;
     },
   },
+  /*
+   * Wyszukiwarka wiadomości per spółka.
+   *
+   * Kanały zbiorcze rzadko wymieniają konkretną spółkę w tytule — dla większości
+   * pozycji dawały zero trafień, przez co „brak wiadomości" oznaczał w praktyce
+   * brak źródła, a nie brak wydarzeń. To zapytanie jest kierowane nazwą spółki,
+   * więc wraca z materiałem faktycznie jej dotyczącym.
+   */
+  {
+    id: 'google-news',
+    urlFor: (instrument) => {
+      if (instrument.assetClass === 'cash' || instrument.assetClass === 'bond') return null;
+
+      const ticker = instrument.symbol.split(':').pop()?.split('.')[0] ?? '';
+      const name = instrument.name.replace(/\s+(S\.?A\.?|PLC|Inc\.?|Corp\.?)$/i, '').trim();
+      const subject = name.length > 2 ? name : ticker;
+      if (!subject) return null;
+
+      const polish = isPolish(instrument);
+      // Zawężenie zapytania odsiewa artykuły o firmie o tej samej nazwie
+      // spoza rynku kapitałowego.
+      const query = polish ? `${subject} akcje OR giełda OR wyniki` : `${subject} stock OR shares OR earnings`;
+      const locale = polish ? 'hl=pl&gl=PL&ceid=PL:pl' : 'hl=en-US&gl=US&ceid=US:en';
+
+      return `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&${locale}`;
+    },
+  },
   // Kanały zbiorcze polskich serwisów. Filtrujemy je po nazwie spółki, więc
   // jeden pobrany kanał obsługuje wszystkie krajowe pozycje naraz.
   {
     id: 'bankier',
     urlFor: (instrument) =>
-      instrument.exchange === 'WSE' ? 'https://www.bankier.pl/rss/wiadomosci.xml' : null,
+      isPolish(instrument) ? 'https://www.bankier.pl/rss/wiadomosci.xml' : null,
   },
   {
     id: 'bankier-gielda',
-    urlFor: (instrument) => (instrument.exchange === 'WSE' ? 'https://www.bankier.pl/rss/gielda.xml' : null),
+    urlFor: (instrument) => (isPolish(instrument) ? 'https://www.bankier.pl/rss/gielda.xml' : null),
   },
   {
     id: 'pb-inwestora',
-    urlFor: (instrument) => (instrument.exchange === 'WSE' ? 'https://www.pb.pl/rss/puls-inwestora.xml' : null),
+    urlFor: (instrument) => (isPolish(instrument) ? 'https://www.pb.pl/rss/puls-inwestora.xml' : null),
   },
   {
     id: 'pb-najnowsze',
-    urlFor: (instrument) => (instrument.exchange === 'WSE' ? 'https://www.pb.pl/rss/najnowsze.xml' : null),
+    urlFor: (instrument) => (isPolish(instrument) ? 'https://www.pb.pl/rss/najnowsze.xml' : null),
   },
 ];
 
@@ -113,7 +157,7 @@ export async function fetchNews(): Promise<string> {
 
         // Kanały zbiorcze (Bankier, Puls Biznesu) filtrujemy po nazwie spółki,
         // inaczej każda spółka dostałaby wszystkie wiadomości z rynku.
-        const isAggregate = source.id !== 'yahoo';
+        const isAggregate = source.id !== 'yahoo' && source.id !== 'google-news';
         const relevant = isAggregate ? entries.filter((e) => mentionsInstrument(e, instrument)) : entries;
 
         for (const entry of relevant.slice(0, 15)) {

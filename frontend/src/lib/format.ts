@@ -96,3 +96,18 @@ export function relativeTime(iso: string | null | undefined): string {
   if (days < 30) return `${days} dni temu`;
   return formatDate(iso);
 }
+
+
+/**
+ * Szacunkowy koszt wywołania modelu.
+ *
+ * Pojedyncze wywołanie kosztuje ułamek centa, więc zaokrąglenie do centów
+ * pokazywałoby wszędzie zero. Poniżej centa schodzimy więc na cztery miejsca.
+ */
+export function formatCost(microUsd: number | null | undefined): string {
+  if (microUsd === null || microUsd === undefined) return 'koszt nieznany';
+  if (microUsd === 0) return '< 0,0001 $';
+
+  const usd = microUsd / 1_000_000;
+  return usd < 0.01 ? `${usd.toFixed(4)} $` : `${usd.toFixed(2)} $`;
+}

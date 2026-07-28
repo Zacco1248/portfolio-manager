@@ -6,7 +6,8 @@ import type { AssetClass } from '@portfolio/shared';
 import { CandlestickChart } from '@/components/CandlestickChart';
 import { Card, DataTable, ErrorBanner, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
-import { formatDate } from '@/lib/format';
+import type { PriceMoveFacts, SavedAnalysis } from '@/lib/api';
+import { formatCost, formatDate, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
 
 /**
@@ -214,45 +215,69 @@ function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
     result: Awaited<ReturnType<typeof api.assist.priceMove>> | null;
   }>({ busy: false, result: null });
 
+  const history = useAsync(
+    () => api.assist.history({ kind: 'price_move', instrumentId, limit: 10 }),
+    [instrumentId],
+  );
+
   const run = async () => {
     setState({ busy: true, result: null });
     try {
-      setState({ busy: false, result: await api.assist.priceMove(instrumentId) });
+      const result = await api.assist.priceMove(instrumentId);
+      setState({ busy: false, result });
+      history.reload();
     } catch {
       setState({ busy: false, result: null });
     }
   };
+
+  const facts = state.result?.data ?? null;
 
   return (
     <Card
       title="Dlaczego kurs się ruszył"
       action={
         <button type="button" className="btn btn-ghost text-2xs" disabled={state.busy} onClick={() => void run()}>
-          {state.busy ? 'Sprawdzam…' : 'Sprawdź'}
+          {state.busy ? 'Sprawdzam…' : 'Sprawdź teraz'}
         </button>
       }
     >
-      {!state.result ? (
-        <p className="px-4 pb-4 pt-2 text-2xs text-content-muted">
+      {!state.result && (
+        <p className="px-4 pb-3 pt-2 text-2xs text-content-muted">
           Zestawia zmianę kursu z ostatnich dwóch tygodni z wiadomościami z tego samego okresu.
-          Wymaga włączonej funkcji „Wyjaśnianie ruchów cen" w Ustawieniach.
+          Wymaga włączonej funkcji „Wyjaśnianie ruchów cen" w Ustawieniach. Każde sprawdzenie zostaje
+          zapisane niżej wraz z datą i szacowanym kosztem.
         </p>
-      ) : (
+      )}
+
+      {state.result && (
         <>
-          {state.result.data && (
-            <div className="px-4 pb-2 pt-2">
-              <div className="text-2xs text-content-muted">
-                Zmiana przez {state.result.data.days} dni:{' '}
-                <span className="font-medium text-content-secondary">
-                  {state.result.data.changeBp === null
-                    ? 'brak notowań'
-                    : `${state.result.data.changeBp > 0 ? '+' : ''}${(state.result.data.changeBp / 100).toFixed(2)}%`}
-                </span>
-                {' · '}
-                {state.result.data.headlines.length} wiadomości w tym okresie
-              </div>
+          {facts && (
+            <div className="px-4 pb-2 pt-2 text-2xs text-content-muted">
+              Zmiana przez {facts.days} dni:{' '}
+              <span className={`font-medium ${facts.changeBp === null ? '' : toneClass(facts.changeBp)}`}>
+                {facts.changeBp === null
+                  ? 'brak notowań'
+                  : `${facts.changeBp > 0 ? '+' : ''}${(facts.changeBp / 100).toFixed(2)}%`}
+              </span>
+              {' · '}
+              {facts.headlines.length} wiadomości o tej spółce
+              {facts.newsInWindow > 0 && ` z ${facts.newsInWindow} zebranych w tym okresie`}
+              {state.result.usage && ` · koszt ${formatCost(state.result.usage.costMicroUsd)}`}
             </div>
           )}
+
+          {facts && facts.headlines.length === 0 && (
+            <p className="px-4 pb-2 text-2xs text-warn">
+              Nie znaleziono wiadomości dotyczących tej spółki.{' '}
+              {facts.newsInWindow === 0
+                ? 'W bazie nie ma żadnych wiadomości z tego okresu — sprawdź, czy pobieranie newsów działa (Aktualności → Odśwież).'
+                : 'W bazie są wiadomości z tego okresu, ale żadna nie wspomina tej spółki w tytule.'}
+            </p>
+          )}
+
+          {facts && facts.headlines.length > 0 && <HeadlineList headlines={facts.headlines} />}
+
           {state.result.text ? (
             <p className="whitespace-pre-wrap border-t border-surface-border px-4 py-3 text-sm leading-relaxed text-content-secondary">
               {state.result.text}
@@ -267,7 +292,94 @@ function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
           </p>
         </>
       )}
+
+      {(history.data?.length ?? 0) > 0 && (
+        <div className="border-t border-surface-border">
+          <div className="px-4 pt-3 text-2xs uppercase tracking-wide text-content-muted">
+            Wcześniejsze sprawdzenia
+          </div>
+          <ul className="divide-y divide-surface-border">
+            {(history.data ?? []).map((entry) => (
+              <SavedAnalysisRow key={entry.id} entry={entry} onDeleted={history.reload} />
+            ))}
+          </ul>
+        </div>
+      )}
     </Card>
+  );
+}
+
+/** Nagłówki, na których model oparł odpowiedź — bez nich nie da się jej zweryfikować. */
+function HeadlineList({ headlines }: { headlines: PriceMoveFacts['headlines'] }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="px-4 pb-2">
+      <button
+        type="button"
+        className="text-2xs text-content-muted hover:text-accent"
+        onClick={() => setOpen((current) => !current)}
+      >
+        {open ? '▾' : '▸'} Nagłówki wzięte pod uwagę ({headlines.length})
+      </button>
+      {open && (
+        <ul className="mt-1 space-y-1">
+          {headlines.map((headline, index) => (
+            <li key={index} className="flex gap-2 text-2xs">
+              <span className="tabular w-20 shrink-0 text-content-muted">{formatDate(headline.publishedAt)}</span>
+              <span className="text-content-secondary">
+                {headline.title}
+                <span className="ml-1 text-content-muted">
+                  ({headline.source}
+                  {headline.linked ? '' : ', dopasowana po nazwie'})
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Zapisana analiza. Zwinięta do jednej linii z datą — po kilku sprawdzeniach
+ * lista rozwiniętych akapitów byłaby nie do przejrzenia.
+ */
+function SavedAnalysisRow({ entry, onDeleted }: { entry: SavedAnalysis; onDeleted: () => void }) {
+  const [open, setOpen] = useState(false);
+  const change = typeof entry.facts?.changeBp === 'number' ? (entry.facts.changeBp as number) : null;
+
+  return (
+    <li className="px-4 py-2">
+      <div className="flex items-baseline gap-2">
+        <button
+          type="button"
+          className="flex-1 truncate text-left text-2xs hover:text-accent"
+          onClick={() => setOpen((current) => !current)}
+        >
+          <span className="tabular text-content-muted">{formatDate(entry.createdAt)}</span>
+          {change !== null && (
+            <span className={`ml-2 tabular font-medium ${toneClass(change)}`}>
+              {change > 0 ? '+' : ''}
+              {(change / 100).toFixed(1)}%
+            </span>
+          )}
+          <span className="ml-2 text-content-muted">{entry.model}</span>
+          <span className="ml-2 text-content-muted">{formatCost(entry.costMicroUsd)}</span>
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost px-2 py-0.5 text-2xs"
+          onClick={() => void api.assist.removeHistory(entry.id).then(onDeleted)}
+        >
+          Usuń
+        </button>
+      </div>
+      {open && (
+        <p className="mt-1 whitespace-pre-wrap text-2xs leading-relaxed text-content-secondary">{entry.text}</p>
+      )}
+    </li>
   );
 }
 

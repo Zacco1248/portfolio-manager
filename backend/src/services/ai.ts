@@ -64,11 +64,23 @@ export interface CompletionMeta {
   finishReason: string | null;
   /** Tokeny zużyte na rozumowanie, jeśli dostawca je raportuje. */
   reasoningTokens: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  provider: AiProvider;
+  model: string;
 }
 
 export async function completeWithMeta(system: string, user: string, maxTokens = 4096): Promise<CompletionMeta> {
   const settings = getAiSettings();
-  const empty: CompletionMeta = { text: null, finishReason: null, reasoningTokens: null };
+  const empty: CompletionMeta = {
+    text: null,
+    finishReason: null,
+    reasoningTokens: null,
+    inputTokens: null,
+    outputTokens: null,
+    provider: settings.provider,
+    model: settings.model,
+  };
 
   if (settings.provider === 'openai') {
     const key = apiKeyFor('openai');
@@ -76,7 +88,11 @@ export async function completeWithMeta(system: string, user: string, maxTokens =
 
     const response = await fetchJson<{
       choices?: { message?: { content?: string }; finish_reason?: string }[];
-      usage?: { completion_tokens_details?: { reasoning_tokens?: number } };
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        completion_tokens_details?: { reasoning_tokens?: number };
+      };
     }>('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}` },
@@ -103,6 +119,10 @@ export async function completeWithMeta(system: string, user: string, maxTokens =
       text: choice?.message?.content ?? null,
       finishReason: choice?.finish_reason ?? null,
       reasoningTokens: response.usage?.completion_tokens_details?.reasoning_tokens ?? null,
+      inputTokens: response.usage?.prompt_tokens ?? null,
+      outputTokens: response.usage?.completion_tokens ?? null,
+      provider: 'openai',
+      model: settings.model,
     };
   }
 
@@ -123,7 +143,39 @@ export async function completeWithMeta(system: string, user: string, maxTokens =
       .join('\n'),
     finishReason: response.stop_reason ?? null,
     reasoningTokens: null,
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+    provider: 'anthropic',
+    model: settings.model,
   };
+}
+
+/**
+ * Cennik w mikrodolarach za milion tokenów.
+ *
+ * Dopasowanie po fragmencie identyfikatora, bo dostawcy dopisują do nazw daty
+ * wydania. Ceny bywają aktualizowane — to szacunek do orientacji w rzędzie
+ * wielkości, a nie faktura. Rachunkiem rozstrzygającym jest panel dostawcy.
+ */
+const PRICING: { match: string; inputPerM: number; outputPerM: number }[] = [
+  { match: 'haiku', inputPerM: 1_000_000, outputPerM: 5_000_000 },
+  { match: 'sonnet', inputPerM: 3_000_000, outputPerM: 15_000_000 },
+  { match: 'opus', inputPerM: 15_000_000, outputPerM: 75_000_000 },
+  { match: 'gpt-5-mini', inputPerM: 250_000, outputPerM: 2_000_000 },
+  { match: 'gpt-5', inputPerM: 1_250_000, outputPerM: 10_000_000 },
+  { match: 'gpt-4o-mini', inputPerM: 150_000, outputPerM: 600_000 },
+  { match: 'gpt-4o', inputPerM: 2_500_000, outputPerM: 10_000_000 },
+];
+
+/** Szacunkowy koszt wywołania w mikrodolarach; null dla nieznanego modelu. */
+export function estimateCostMicroUsd(meta: CompletionMeta): number | null {
+  if (meta.inputTokens === null || meta.outputTokens === null) return null;
+
+  const model = meta.model.toLowerCase();
+  const price = PRICING.find((entry) => model.includes(entry.match));
+  if (!price) return null;
+
+  return Math.round((meta.inputTokens * price.inputPerM + meta.outputTokens * price.outputPerM) / 1_000_000);
 }
 
 export interface NewsForAnalysis {

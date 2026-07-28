@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/http.js';
 import {
   DOCUMENT_LIMIT,
+  deleteAnalysis,
+  listAnalyses,
   explainPriceMove,
   monthlySummary,
   purchaseCheck,
@@ -98,3 +100,24 @@ assistRouter.post(
     res.json(await suggestImportMapping(parsed.headers, parsed.samples));
   }),
 );
+
+// ── Zapisane analizy ─────────────────────────────────────────
+assistRouter.get('/history', (req, res, next) => {
+  const parsed = z
+    .object({
+      kind: z.string().trim().max(40).optional(),
+      instrumentId: z.coerce.number().int().positive().optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(20),
+    })
+    .safeParse(req.query);
+  if (!parsed.success) return next(parsed.error);
+
+  res.json(listAnalyses(parsed.data.kind, parsed.data.instrumentId, parsed.data.limit));
+});
+
+assistRouter.delete('/history/:id', (req, res, next) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) return next(id.error);
+  deleteAnalysis(id.data);
+  res.json({ ok: true });
+});

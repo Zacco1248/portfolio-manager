@@ -595,3 +595,36 @@ export type AlertEventRow = typeof alertEvents.$inferSelect;
 export type ImportBatchRow = typeof importBatches.$inferSelect;
 export type DividendEventRow = typeof dividendEvents.$inferSelect;
 export type ReportDateRow = typeof reportDates.$inferSelect;
+
+
+/**
+ * Zapisane odpowiedzi asystenta.
+ *
+ * Wywołanie modelu kosztuje i trwa, więc wynik ma przetrwać odświeżenie strony.
+ * Trzymamy też fakty, na których powstał — po miesiącu sam komentarz bez liczb,
+ * które go wywołały, jest nieczytelny.
+ */
+export const aiAnalyses = sqliteTable(
+  'ai_analyses',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    /** Rodzaj analizy: price_move, monthly_summary, purchase_check, tax, document. */
+    kind: text('kind').notNull(),
+    instrumentId: integer('instrument_id').references(() => instruments.id, { onDelete: 'cascade' }),
+    portfolioId: integer('portfolio_id').references(() => portfolios.id, { onDelete: 'cascade' }),
+    createdAt: text('created_at').notNull().default(now),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    /** Szacowany koszt w mikrodolarach — grosz to za gruba jednostka dla pojedynczego wywołania. */
+    costMicroUsd: integer('cost_micro_usd'),
+    /** Liczby, na których powstała odpowiedź. */
+    facts: text('facts', { mode: 'json' }).$type<Record<string, unknown>>(),
+    text: text('text').notNull(),
+  },
+  (t) => [
+    index('ai_analyses_kind_idx').on(t.kind, t.createdAt),
+    index('ai_analyses_instrument_idx').on(t.instrumentId, t.createdAt),
+  ],
+);
