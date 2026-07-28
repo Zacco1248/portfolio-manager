@@ -22,7 +22,7 @@ import { evaluateAlerts, recentAlertEvents } from '../services/alerts.js';
 import { AI_FEATURES, AI_PROVIDERS, aiStatus, updateAiSettings } from '../services/ai-config.js';
 import { classifyAll } from '../services/classify.js';
 import { duplicateSummary } from '../services/duplicates.js';
-import { buildSuggestions } from '../services/suggestions.js';
+import { buildContext, buildSuggestions } from '../services/suggestions.js';
 import { deleteTransaction } from '../services/transactions.js';
 import { buildInsights, buildProjection, emergencyFundStatus } from '../services/insights.js';
 import { generateNarrative, testAiConnection } from '../services/ai.js';
@@ -403,15 +403,37 @@ toolsRouter.put('/holdings/:instrumentId', (req, res, next) => {
   res.json({ ok: true, saved, holdings: getHoldings(id.data) });
 });
 
+/*
+ * Liczby i komentarz modelu rozdzielone na dwie trasy.
+ *
+ * Wywołanie modelu trwa kilka do kilkunastu sekund. Dopóki siedziało w tej
+ * samej odpowiedzi, cała strona czekała na coś, co jest wyłącznie dodatkiem —
+ * a przy wyłączonym AI ładowała się natychmiast, co wyglądało jak kara za
+ * podłączenie klucza.
+ */
 // ── Podsumowanie osiągnięć i projekcja ───────────────────────
+toolsRouter.get('/insights', (req, res, next) => {
+  const parsed = portfolioQuerySchema.safeParse(req.query);
+  if (!parsed.success) return next(parsed.error);
+
+  const ids = activePortfolioIds(parsed.data.portfolioId);
+
+  res.json({
+    insights: buildInsights(ids),
+    projection: buildProjection(ids),
+    emergencyFund: emergencyFundStatus(),
+    /** Komentarz przychodzi osobno — patrz /insights/narrative. */
+    narrative: null,
+  });
+});
+
 toolsRouter.get(
-  '/insights',
+  '/insights/narrative',
   asyncHandler(async (req, res) => {
     const parsed = portfolioQuerySchema.safeParse(req.query);
     if (!parsed.success) throw parsed.error;
 
     const ids = activePortfolioIds(parsed.data.portfolioId);
-    const insights = buildInsights(ids);
     const projection = buildProjection(ids);
     const emergencyFund = emergencyFundStatus();
 
@@ -421,8 +443,6 @@ toolsRouter.get(
       [...cashByPortfolio.values()].reduce((sum, v) => sum + v, 0);
     const invested = netInvested(ids);
 
-    // Komentarz od modelu jest dodatkiem — wszystkie liczby powyżej powstały
-    // lokalnie i nie zmieniają się, gdy AI jest wyłączone.
     const narrative = await generateNarrative({
       valuePlnMinor: value,
       investedPlnMinor: invested,
@@ -432,7 +452,7 @@ toolsRouter.get(
       emergencyFundCoveredMonths: emergencyFund.coveredMonths,
     });
 
-    res.json({ insights, projection, emergencyFund, narrative });
+    res.json({ narrative });
   }),
 );
 
@@ -500,6 +520,14 @@ toolsRouter.post('/duplicates/resolve', (req, res, next) => {
 });
 
 // ── Propozycje uzupełnienia portfela ─────────────────────────
+// Kontekst liczony lokalnie zwracamy natychmiast; propozycje modelu wymagają
+// osobnego zapytania, żeby nie blokowały reszty widoku rebalansu.
+toolsRouter.get('/suggestions/context', (req, res, next) => {
+  const parsed = portfolioQuerySchema.safeParse(req.query);
+  if (!parsed.success) return next(parsed.error);
+  res.json({ context: buildContext(parsed.data.portfolioId) });
+});
+
 toolsRouter.get(
   '/suggestions',
   asyncHandler(async (req, res) => {

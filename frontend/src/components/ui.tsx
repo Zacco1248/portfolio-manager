@@ -231,3 +231,29 @@ export function DataTable({
     </div>
   );
 }
+
+
+/**
+ * Miejsce na treść od modelu językowego, dociąganą po wyrenderowaniu reszty.
+ *
+ * Wywołanie modelu trwa kilka do kilkunastu sekund. Zamiast wstrzymywać całą
+ * stronę, pokazujemy w tym miejscu migający zarys tekstu — sygnał, że coś tu
+ * będzie, bez blokowania liczb, które są już policzone.
+ */
+export function AiPending({ lines = 3, label = 'Model układa komentarz…' }: { lines?: number; label?: string }) {
+  return (
+    <div className="px-4 pb-3 pt-2" aria-busy="true" aria-live="polite">
+      <div className="space-y-2">
+        {Array.from({ length: lines }, (_, index) => (
+          <div
+            key={index}
+            className="h-3 animate-pulse rounded bg-surface-overlay"
+            // Ostatnia linia krótsza — akapit tekstu nie kończy się równo.
+            style={{ width: index === lines - 1 ? '62%' : '100%', animationDelay: `${index * 120}ms` }}
+          />
+        ))}
+      </div>
+      <div className="mt-2 text-2xs text-content-muted">{label}</div>
+    </div>
+  );
+}

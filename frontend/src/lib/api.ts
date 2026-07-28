@@ -265,19 +265,17 @@ export const api = {
         };
         narrative: string | null;
       }>(`/insights${query({ portfolioId })}`),
+    /** Komentarz modelu, dociągany osobno — potrafi trwać kilkanaście sekund. */
+    narrative: (portfolioId?: number) =>
+      get<{ narrative: string | null }>(`/insights/narrative${query({ portfolioId })}`),
   },
 
   suggestions: {
+    context: (portfolioId?: number) =>
+      get<{ context: SuggestionContext }>(`/suggestions/context${query({ portfolioId })}`),
     get: (portfolioId?: number) =>
       get<{
-        context: {
-          gaps: { key: string; label: string; currentSharePercent: number; targetSharePercent: number; gapPercent: number }[];
-          overweight: { key: string; label: string; currentSharePercent: number; targetSharePercent: number }[];
-          sectors: { name: string; sharePercent: number }[];
-          regions: { name: string; sharePercent: number }[];
-          missingAssetClasses: string[];
-          concentrated: { symbol: string; sharePercent: number }[];
-        };
+        context: SuggestionContext;
         suggestions: { kind: string; title: string; rationale: string }[];
         unavailableReason: string | null;
         disclaimer: string;
@@ -463,4 +461,14 @@ export interface TaxAssistantFacts {
   dividendWithholdingPlnMinor: number;
   dividendDuePlnMinor: number;
   excludedPortfolios: string[];
+}
+
+/** Struktura portfela stojąca za propozycjami — liczona lokalnie, bez modelu. */
+export interface SuggestionContext {
+  gaps: { key: string; label: string; currentSharePercent: number; targetSharePercent: number; gapPercent: number }[];
+  overweight: { key: string; label: string; currentSharePercent: number; targetSharePercent: number }[];
+  sectors: { name: string; sharePercent: number }[];
+  regions: { name: string; sharePercent: number }[];
+  missingAssetClasses: string[];
+  concentrated: { symbol: string; sharePercent: number }[];
 }

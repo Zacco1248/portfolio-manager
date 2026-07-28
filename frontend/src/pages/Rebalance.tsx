@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ALLOCATION_DIMENSION_LABELS, ASSET_CLASS_LABELS } from '@portfolio/shared';
 import type { AllocationDimension, RebalancePlan } from '@portfolio/shared';
-import { AiDisclaimer, Card, DataTable, ErrorBanner, Field, Spinner, Toast, WarningList, useToast } from '@/components/ui';
+import { AiDisclaimer, AiPending, Card, DataTable, ErrorBanner, Field, Spinner, Toast, WarningList, useToast } from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
 import { formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
@@ -19,6 +19,9 @@ export function Rebalance() {
     [portfolioId, applied],
   );
   const targets = useAsync(() => api.rebalance.targets(portfolioId), [portfolioId]);
+  // Struktura portfela liczy się lokalnie i pojawia natychmiast; propozycje
+  // modelu dociągają się osobno, żeby nie opóźniały planu rebalansu.
+  const context = useAsync(() => api.suggestions.context(portfolioId), [portfolioId]);
   const suggestions = useAsync(() => api.suggestions.get(portfolioId), [portfolioId]);
 
   return (
@@ -65,30 +68,34 @@ export function Rebalance() {
         </>
       )}
 
-      {suggestions.data && (
+      {context.data && (
         <Card
           title="Czego brakuje w portfelu"
           action={
-            suggestions.data.unavailableReason ? (
+            suggestions.data?.unavailableReason ? (
               <span className="text-2xs text-content-muted">Propozycje AI wyłączone</span>
             ) : null
           }
         >
           <div className="grid gap-3 p-4 pt-2 sm:grid-cols-2 lg:grid-cols-4">
-            <ContextList title="Luki wobec celu" items={suggestions.data.context.gaps.map((g) => `${g.label}: ${g.currentSharePercent}% z ${g.targetSharePercent}%`)} />
-            <ContextList title="Sektory w portfelu" items={suggestions.data.context.sectors.map((s) => `${s.name} ${s.sharePercent}%`)} />
-            <ContextList title="Regiony" items={suggestions.data.context.regions.map((r) => `${r.name} ${r.sharePercent}%`)} />
+            <ContextList title="Luki wobec celu" items={context.data.context.gaps.map((g) => `${g.label}: ${g.currentSharePercent}% z ${g.targetSharePercent}%`)} />
+            <ContextList title="Sektory w portfelu" items={context.data.context.sectors.map((s) => `${s.name} ${s.sharePercent}%`)} />
+            <ContextList title="Regiony" items={context.data.context.regions.map((r) => `${r.name} ${r.sharePercent}%`)} />
             <ContextList
               title="Brakujące klasy"
-              items={suggestions.data.context.missingAssetClasses}
+              items={context.data.context.missingAssetClasses}
               emptyText="Wszystkie klasy obecne"
             />
           </div>
 
-          {suggestions.data.suggestions.length > 0 ? (
+          {suggestions.loading ? (
+            <div className="border-t border-surface-border">
+              <AiPending lines={4} label="Model dobiera kierunki uzupełnienia…" />
+            </div>
+          ) : (suggestions.data?.suggestions.length ?? 0) > 0 ? (
             <>
               <ul className="divide-y divide-surface-border border-t border-surface-border">
-                {suggestions.data.suggestions.map((item, index) => (
+                {(suggestions.data?.suggestions ?? []).map((item, index) => (
                   <li key={index} className="px-4 py-3">
                     <div className="flex items-baseline gap-2">
                       <span className="badge bg-surface-overlay text-content-muted">{item.kind}</span>
@@ -99,13 +106,12 @@ export function Rebalance() {
                 ))}
               </ul>
               <div className="p-4">
-                <AiDisclaimer text={suggestions.data.disclaimer} />
+                <AiDisclaimer text={suggestions.data?.disclaimer ?? ''} />
               </div>
             </>
           ) : (
             <p className="border-t border-surface-border px-4 py-3 text-2xs text-content-muted">
-              {suggestions.data.unavailableReason ??
-                'Brak propozycji.'}{' '}
+              {suggestions.data?.unavailableReason ?? 'Brak propozycji.'}{' '}
               Konkretne kierunki dokupienia podpowiada model językowy — włączysz go w Ustawieniach,
               funkcja „Wskazówki do rebalansu". Liczby powyżej powstają lokalnie i nie zależą od AI.
             </p>

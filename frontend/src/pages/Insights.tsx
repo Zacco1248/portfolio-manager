@@ -1,6 +1,6 @@
 import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link } from 'react-router-dom';
-import { AiDisclaimer, Card, ErrorBanner, Spinner } from '@/components/ui';
+import { AiDisclaimer, AiPending, Card, ErrorBanner, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
@@ -25,11 +25,14 @@ export function Insights() {
   const portfolioId = usePortfolioParam();
   const { data, error, loading, reload } = useAsync(() => api.insights.get(portfolioId), [portfolioId]);
 
+  // Komentarz modelu leci osobno i nie wstrzymuje liczb — patrz AiPending.
+  const narrative = useAsync(() => api.insights.narrative(portfolioId), [portfolioId]);
+
   if (loading) return <Spinner />;
   if (error) return <ErrorBanner message={error} onRetry={reload} />;
   if (!data) return null;
 
-  const { insights, projection, emergencyFund, narrative } = data;
+  const { insights, projection, emergencyFund } = data;
   const last = projection.points.at(-1);
   const growth = last ? last.valuePlnMinor - last.contributedPlnMinor : 0;
 
@@ -41,12 +44,20 @@ export function Insights() {
 
   return (
     <div className="space-y-4">
-      {narrative && (
+      {(narrative.loading || narrative.data?.narrative) && (
         <Card title="Komentarz">
-          <p className="whitespace-pre-line px-4 pb-3 pt-2 text-sm text-content-secondary">{narrative}</p>
-          <div className="px-4 pb-4">
-            <AiDisclaimer text="Komentarz wygenerowany automatycznie. Nie stanowi rekomendacji ani doradztwa inwestycyjnego." />
-          </div>
+          {narrative.loading ? (
+            <AiPending />
+          ) : (
+            <>
+              <p className="whitespace-pre-line px-4 pb-3 pt-2 text-sm text-content-secondary">
+                {narrative.data?.narrative}
+              </p>
+              <div className="px-4 pb-4">
+                <AiDisclaimer text="Komentarz wygenerowany automatycznie. Nie stanowi rekomendacji ani doradztwa inwestycyjnego." />
+              </div>
+            </>
+          )}
         </Card>
       )}
 
