@@ -319,6 +319,8 @@ export interface PriceMoveFacts {
   newsInWindow: number;
   /** Liczba sesji w naszej bazie. Zero oznacza lukę w danych, nie brak obrotu na giełdzie. */
   candleCount: number;
+  /** Skąd pochodzi zmiana kursu: z zapisanej historii czy z odpytania dostawcy. */
+  priceSource: 'baza' | 'dostawca' | null;
 }
 
 /**
@@ -406,6 +408,7 @@ export function priceMoveFacts(instrumentId: number): PriceMoveFacts | null {
     headlines,
     newsInWindow: recent.length,
     candleCount: candles.length,
+    priceSource: changeBp === null ? null : 'baza',
   };
 }
 
@@ -476,6 +479,16 @@ export async function explainPriceMove(instrumentId: number): Promise<AssistResu
     } catch (err) {
       log.warn(`Doraźne uzupełnienie notowań nieudane: ${errorMessage(err)}`);
     }
+  }
+
+  /*
+   * Ostatnia deska ratunku: zmiana liczona wprost z odpowiedzi dostawcy, bez
+   * pośrednictwa bazy. Zapis potrafi się nie udać z powodów niezwiązanych
+   * z dostępnością notowań, a do wyjaśnienia ruchu wystarczy sama liczba.
+   */
+  if (facts.changeBp === null) {
+    const live = await livePriceChange(instrumentId);
+    if (live !== null) facts = { ...facts, changeBp: live, priceSource: 'dostawca' };
   }
 
   const payload = [
@@ -745,4 +758,36 @@ export async function suggestImportMapping(
   ].join('\n');
 
   return withModel('importMapping', data, MAPPING_PROMPT, payload, 1200);
+}
+
+
+/**
+ * Zmiana kursu odczytana bezpośrednio od dostawcy notowań.
+ *
+ * Rejestr sam próbuje kolejnych źródeł (Yahoo, Stooq, CoinGecko) i zwraca
+ * pierwsze, które odpowie. Nie zapisujemy tych świec — chodzi wyłącznie o to,
+ * żeby móc podać skalę ruchu, gdy lokalna historia jest pusta.
+ */
+async function livePriceChange(instrumentId: number): Promise<number | null> {
+  try {
+    const instrument = db.select().from(instruments).where(eq(instruments.id, instrumentId)).get();
+    if (!instrument) return null;
+
+    const { fetchHistory } = await import('../providers/registry.js');
+    const { toProviderInstrument } = await import('./prices.js');
+
+    const to = today(config.timezone);
+    const result = await fetchHistory(toProviderInstrument(instrument), addDays(to, -MOVE_WINDOW_DAYS), to);
+    if (!result || result.candles.length < 2) return null;
+
+    const first = result.candles[0]!.closeE8;
+    const last = result.candles[result.candles.length - 1]!.closeE8;
+    if (first <= 0) return null;
+
+    log.info(`Zmiana kursu ${instrument.symbol} wprost od dostawcy ${result.providerId}`);
+    return Math.round((last / first - 1) * 10_000);
+  } catch (err) {
+    log.warn(`Odczyt zmiany kursu od dostawcy nieudany: ${errorMessage(err)}`);
+    return null;
+  }
 }

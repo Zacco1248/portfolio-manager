@@ -432,6 +432,8 @@ export interface PriceMoveFacts {
   days: number;
   headlines: { title: string; publishedAt: string; summary: string | null; source: string; linked: boolean }[];
   newsInWindow: number;
+  candleCount: number;
+  priceSource: 'baza' | 'dostawca' | null;
 }
 
 export interface PurchaseCheckFacts {

@@ -260,6 +260,11 @@ function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
                   ? 'brak notowań'
                   : `${facts.changeBp > 0 ? '+' : ''}${(facts.changeBp / 100).toFixed(2)}%`}
               </span>
+              {facts.priceSource === 'dostawca' && (
+                <span className="ml-1" title="Lokalna historia była pusta — kurs odczytany wprost od dostawcy">
+                  (prosto od dostawcy)
+                </span>
+              )}
               {' · '}
               {facts.headlines.length} wiadomości o tej spółce
               {facts.newsInWindow > 0 && ` z ${facts.newsInWindow} zebranych w tym okresie`}
