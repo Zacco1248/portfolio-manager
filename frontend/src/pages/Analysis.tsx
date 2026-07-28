@@ -1,6 +1,16 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import type { XirrResult } from '@portfolio/shared';
 import { Card, DataTable, EmptyState, ErrorBanner, KpiTile, Spinner, Toast, useToast } from '@/components/ui';
 import { api } from '@/lib/api';
@@ -45,13 +55,16 @@ export function Analysis() {
       return created;
     };
 
+    // Serie znormalizowane do 100 pokazujemy jako zmianę procentową od
+    // początku okresu. Wykres w wartościach indeksu jest nieczytelny: 100 to
+    // punkt odniesienia, a nie wartość, którą da się porównać z czymkolwiek.
     for (const point of analytics.data.portfolioIndexed) {
-      ensureRow(point.date).Portfel = point.indexed / 100;
+      ensureRow(point.date).Portfel = point.indexed / 100 - 100;
     }
 
     for (const series of analytics.data.benchmarks) {
       for (const point of series.points) {
-        ensureRow(point.date)[series.label] = point.indexed / 100;
+        ensureRow(point.date)[series.label] = point.indexed / 100 - 100;
       }
     }
 
@@ -100,7 +113,7 @@ export function Analysis() {
       </div>
 
       <Card
-        title="Portfel na tle benchmarków (start = 100)"
+        title="Portfel na tle benchmarków (zmiana od początku okresu)"
         action={
           <button type="button" className="btn btn-ghost text-2xs" onClick={() => void refreshBenchmarks()} disabled={busy}>
             {busy ? 'Pobieram…' : 'Odśwież benchmarki'}
@@ -152,8 +165,10 @@ export function Analysis() {
                   tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
                   axisLine={false}
                   tickLine={false}
-                  width={48}
+                  width={56}
+                  tickFormatter={(v: number) => `${v > 0 ? '+' : ''}${v.toFixed(0)}%`}
                 />
+                <ReferenceLine y={0} stroke="rgb(var(--content-muted))" strokeDasharray="3 3" />
                 <Tooltip
                   contentStyle={{
                     background: 'rgb(var(--surface-overlay))',
@@ -162,7 +177,7 @@ export function Analysis() {
                     fontSize: 12,
                   }}
                   labelFormatter={(label: string) => formatDate(label)}
-                  formatter={(value: number) => value.toFixed(1)}
+                  formatter={(value: number) => `${value > 0 ? '+' : ''}${value.toFixed(2)}%`}
                 />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 <Line

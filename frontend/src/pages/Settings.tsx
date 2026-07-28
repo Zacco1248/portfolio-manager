@@ -3,7 +3,7 @@ import { ALERT_KIND_LABELS, TAX_REGIMES, TAX_REGIME_LABELS } from '@portfolio/sh
 import type { AlertKind, TaxRegime } from '@portfolio/shared';
 import { Card, DataTable, ErrorBanner, Field, Spinner, Toast, useToast } from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
-import { formatDateTime, relativeTime } from '@/lib/format';
+import { formatDate, formatDateTime, formatPln, relativeTime } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
 import { useApp } from '@/state/app';
 
@@ -79,7 +79,7 @@ export function Settings() {
           </div>
         </div>
 
-        <DataTable headers={['Nazwa', 'Etykieta', 'Reżim podatkowy', 'Broker', 'Waluta', '']}>
+        <DataTable headers={['Nazwa', 'Etykieta', 'Reżim podatkowy', 'Poduszka', 'Broker', '']} minWidth={720}>
           {portfolios.map((portfolio) => (
             <tr key={portfolio.id}>
               <td className="table-cell font-medium">{portfolio.name}</td>
@@ -99,8 +99,21 @@ export function Settings() {
                   ))}
                 </select>
               </td>
+              <td className="table-cell">
+                <label className="flex items-center gap-1.5 text-2xs text-content-muted">
+                  <input
+                    type="checkbox"
+                    checked={portfolio.emergencyFund}
+                    onChange={(e) =>
+                      void api.portfolios
+                        .update(portfolio.id, { emergencyFund: e.target.checked })
+                        .then(refreshPortfolios)
+                    }
+                  />
+                  poduszka
+                </label>
+              </td>
               <td className="table-cell text-content-secondary">{portfolio.broker ?? '—'}</td>
-              <td className="table-cell tabular">{portfolio.baseCurrency}</td>
               <td className="table-cell text-right">
                 <button
                   type="button"
@@ -118,9 +131,14 @@ export function Settings() {
           ))}
         </DataTable>
         <p className="px-4 pb-3 text-2xs text-content-muted">
-          Reżim podatkowy decyduje o tym, czy portfel wchodzi do raportu PIT-38. IKE i IKZE są z niego wyłączone.
+          Reżim podatkowy decyduje o tym, czy portfel wchodzi do raportu PIT-38 — IKE i IKZE są z niego wyłączone.
+          Portfel oznaczony jako poduszka jest pomijany w propozycjach rebalansu.
         </p>
       </Card>
+
+      <AiSettingsCard onMessage={show} />
+
+      <EmergencyFundSettings onMessage={show} />
 
       <Card title="Powiadomienia">
         {settings.loading && <Spinner />}
@@ -201,8 +219,29 @@ export function Settings() {
           >
             Odśwież dane dywidendowe
           </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() =>
+              void api.corporate
+                .classify()
+                .then((r) =>
+                  show(
+                    r.updated === 0
+                      ? 'Nic do uzupełnienia — wszystkie instrumenty mają klasę i sektor.'
+                      : `Uzupełniono ${r.updated} instrumentów${r.changes.length > 0 ? ` (${r.changes.map((c) => `${c.symbol}: ${c.from}→${c.to}`).join(', ')})` : ''}`,
+                    'success',
+                  ),
+                )
+                .catch(() => show('Nie udało się rozpoznać instrumentów', 'error'))
+            }
+          >
+            Rozpoznaj typy i sektory
+          </button>
         </div>
       </Card>
+
+      <DuplicatesCard onMessage={show} />
 
       <EtfHoldingsEditor onMessage={show} />
 
@@ -401,6 +440,245 @@ function EtfHoldingsEditor({ onMessage }: { onMessage: (message: string, tone: '
           )}
         </>
       )}
+    </Card>
+  );
+}
+
+
+/**
+ * Konfiguracja funkcji AI.
+ *
+ * Każda funkcja jest osobnym przełącznikiem i przy każdej widać, co dokładnie
+ * trafia do dostawcy modelu. Domyślnie wszystkie są wyłączone — obecność
+ * klucza w `.env` nie oznacza zgody na wysyłanie danych.
+ */
+function AiSettingsCard({ onMessage }: { onMessage: (message: string, tone: 'info' | 'error' | 'success') => void }) {
+  const ai = useAsync(() => api.ai.status(), []);
+  const [model, setModel] = useState<string | null>(null);
+
+  if (!ai.data) return null;
+
+  const status = ai.data;
+  const suggestions = status.suggestedModels[status.provider] ?? [];
+  const currentModel = model ?? status.model;
+
+  const save = (body: Record<string, unknown>) => {
+    void api.ai
+      .update(body)
+      .then(() => {
+        setModel(null);
+        ai.reload();
+      })
+      .catch(() => onMessage('Nie udało się zapisać ustawień AI', 'error'));
+  };
+
+  return (
+    <Card
+      title="Funkcje AI"
+      action={
+        <span className="text-2xs text-content-muted">
+          Klucze: Anthropic {status.keys.anthropic ? '✓' : '—'}, OpenAI {status.keys.openai ? '✓' : '—'}
+        </span>
+      }
+    >
+      <div className="grid gap-3 p-4 pt-2 sm:grid-cols-2">
+        <Field label="Dostawca">
+          <select className="input" value={status.provider} onChange={(e) => save({ provider: e.target.value })}>
+            <option value="anthropic">Anthropic (Claude)</option>
+            <option value="openai">OpenAI (GPT / Codex)</option>
+          </select>
+        </Field>
+
+        <Field
+          label="Model"
+          hint={suggestions.find((m) => m.id === currentModel)?.hint ?? 'Możesz wpisać dowolny identyfikator modelu.'}
+        >
+          <div className="flex gap-2">
+            <input className="input" value={currentModel} onChange={(e) => setModel(e.target.value)} list="modele-ai" />
+            <datalist id="modele-ai">
+              {suggestions.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </datalist>
+            <button type="button" className="btn" disabled={model === null} onClick={() => save({ model: currentModel })}>
+              Zapisz
+            </button>
+          </div>
+        </Field>
+      </div>
+
+      <ul className="divide-y divide-surface-border border-t border-surface-border">
+        {status.features.map((feature) => (
+          <li key={feature.key} className="px-4 py-3">
+            <label className="flex items-start gap-2.5">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={feature.enabled}
+                onChange={(e) => save({ features: { [feature.key]: e.target.checked } })}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="text-sm font-medium">{feature.label}</span>
+                <span className="mt-0.5 block text-2xs text-content-secondary">{feature.description}</span>
+                <span className="mt-1 block text-2xs text-content-muted">
+                  <span className="font-medium">Wysyłane dane:</span> {feature.dataSent}
+                </span>
+                {feature.enabled && !feature.available && feature.reason && (
+                  <span className="mt-1 block text-2xs text-warn">{feature.reason}</span>
+                )}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+
+      <p className="border-t border-surface-border px-4 py-3 text-2xs text-content-muted">
+        Wyłączenie funkcji oznacza, że aplikacja nie wysyła nic do dostawcy modelu. Wszystkie liczby — wycena,
+        podatki, projekcja — powstają lokalnie i nie zależą od tych ustawień.
+      </p>
+    </Card>
+  );
+}
+
+/** Parametry poduszki finansowej: miesięczne wydatki i docelowa liczba miesięcy. */
+function EmergencyFundSettings({ onMessage }: { onMessage: (message: string, tone: 'info' | 'error' | 'success') => void }) {
+  const settings = useAsync(() => api.settings.get(), []);
+  const [expenses, setExpenses] = useState<string | null>(null);
+  const [months, setMonths] = useState<string | null>(null);
+
+  if (!settings.data) return null;
+
+  const currentExpenses = expenses ?? String(((settings.data.monthlyExpensesPlnMinor as number) ?? 0) / 100);
+  const currentMonths = months ?? String((settings.data.emergencyFundMonths as number) ?? 6);
+
+  const save = () => {
+    void api.settings
+      .update({
+        monthlyExpensesPlnMinor: Math.round(Number(currentExpenses.replace(',', '.')) * 100),
+        emergencyFundMonths: Number(currentMonths),
+      })
+      .then(() => {
+        setExpenses(null);
+        setMonths(null);
+        settings.reload();
+        onMessage('Zapisano parametry poduszki', 'success');
+      })
+      .catch(() => onMessage('Nie udało się zapisać', 'error'));
+  };
+
+  return (
+    <Card title="Poduszka finansowa">
+      <div className="grid gap-3 p-4 pt-2 sm:grid-cols-3">
+        <Field label="Miesięczne wydatki (zł)" hint="Podstawa do wyliczenia, na ile miesięcy starczy poduszka.">
+          <input className="input" value={currentExpenses} onChange={(e) => setExpenses(e.target.value)} placeholder="4500" />
+        </Field>
+        <Field label="Docelowa liczba miesięcy" hint="Zwykle przyjmuje się od 3 do 12.">
+          <input className="input" value={currentMonths} onChange={(e) => setMonths(e.target.value)} />
+        </Field>
+        <div className="flex items-end">
+          <button type="button" className="btn" onClick={save} disabled={expenses === null && months === null}>
+            Zapisz
+          </button>
+        </div>
+      </div>
+      <p className="px-4 pb-4 text-2xs text-content-muted">
+        Który portfel jest poduszką, zaznaczasz w tabeli powyżej. Taki portfel nie wchodzi do propozycji rebalansu.
+      </p>
+    </Card>
+  );
+}
+
+
+/**
+ * Wykrywanie zduplikowanych transakcji.
+ *
+ * Deduplikacja przy imporcie chroni przed wgraniem tego samego pliku dwa razy,
+ * ale nie cofnie duplikatów już zapisanych — najczęstsza przyczyna zawyżonej
+ * wartości portfela. Nic nie usuwamy automatycznie: dwie identyczne operacje
+ * tego samego dnia bywają prawdziwe.
+ */
+function DuplicatesCard({ onMessage }: { onMessage: (message: string, tone: 'info' | 'error' | 'success') => void }) {
+  const duplicates = useAsync(() => api.duplicates.find(), []);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  if (!duplicates.data) return null;
+  const { groups, totalExtraTransactions, totalExcessPlnMinor } = duplicates.data;
+
+  if (groups.length === 0) {
+    return (
+      <Card title="Duplikaty transakcji">
+        <p className="px-4 pb-4 pt-2 text-sm text-content-muted">
+          Nie znaleziono zduplikowanych transakcji.
+        </p>
+      </Card>
+    );
+  }
+
+  const remove = () => {
+    if (!window.confirm(`Usunąć nadmiarowe kopie z ${selected.size} grup? W każdej zostanie najstarszy wpis.`)) return;
+    void api.duplicates
+      .resolve([...selected])
+      .then((r) => {
+        setSelected(new Set());
+        duplicates.reload();
+        onMessage(`Usunięto ${r.removed} zduplikowanych transakcji`, 'success');
+      })
+      .catch(() => onMessage('Nie udało się usunąć duplikatów', 'error'));
+  };
+
+  return (
+    <Card
+      title="Duplikaty transakcji"
+      action={
+        <span className="text-2xs text-warn">
+          {totalExtraTransactions} nadmiarowych wpisów, wpływ {formatPln(totalExcessPlnMinor)}
+        </span>
+      }
+    >
+      <p className="px-4 pb-2 pt-2 text-2xs text-content-muted">
+        Te operacje występują w bazie więcej niż raz. Zaznacz grupy, w których to faktycznie pomyłka — w każdej
+        zostanie najstarszy wpis, reszta zostanie usunięta.
+      </p>
+
+      <div className="max-h-72 overflow-y-auto">
+        <DataTable headers={['', 'Data', 'Portfel', 'Instrument', 'Typ', { label: 'Kwota', align: 'right' }, { label: 'Kopii', align: 'right' }]}>
+          {groups.map((group) => (
+            <tr key={group.key}>
+              <td className="table-cell">
+                <input
+                  type="checkbox"
+                  checked={selected.has(group.key)}
+                  onChange={() =>
+                    setSelected((current) => {
+                      const next = new Set(current);
+                      if (next.has(group.key)) next.delete(group.key);
+                      else next.add(group.key);
+                      return next;
+                    })
+                  }
+                />
+              </td>
+              <td className="table-cell tabular">{formatDate(group.tradeDate)}</td>
+              <td className="table-cell text-2xs text-content-muted">{group.portfolioName}</td>
+              <td className="table-cell">{group.instrumentSymbol ?? 'gotówka'}</td>
+              <td className="table-cell text-2xs">{group.type}</td>
+              <td className="table-cell tabular text-right">{formatPln(group.amountPlnMinor)}</td>
+              <td className="table-cell tabular text-right font-medium">{group.count}</td>
+            </tr>
+          ))}
+        </DataTable>
+      </div>
+
+      <div className="flex items-center gap-3 border-t border-surface-border px-4 py-3">
+        <button type="button" className="btn" onClick={remove} disabled={selected.size === 0}>
+          Usuń nadmiarowe kopie
+        </button>
+        <button type="button" className="btn btn-ghost text-2xs" onClick={() => setSelected(new Set(groups.map((g) => g.key)))}>
+          Zaznacz wszystkie
+        </button>
+      </div>
     </Card>
   );
 }

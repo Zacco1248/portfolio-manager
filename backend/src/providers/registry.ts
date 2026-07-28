@@ -8,6 +8,7 @@ import { createLogger } from '../lib/logger.js';
 import { coingeckoProvider } from './coingecko.js';
 import { cashProvider, nbpGoldProvider } from './nbp.js';
 import type { PriceProvider, ProviderCandle, ProviderInstrument, ProviderQuote } from './types.js';
+import { stooqProvider } from './stooq.js';
 import { yahooProvider } from './yahoo.js';
 
 const log = createLogger('providers');
@@ -16,12 +17,19 @@ const log = createLogger('providers');
  * Kolejność ma znaczenie — pierwszy dostawca, który deklaruje obsługę
  * instrumentu, jest pytany jako pierwszy; reszta służy za fallback.
  *
- * Uwaga: Stooq, wskazany pierwotnie jako źródło dla GPW, wypadł z zestawu.
- * Jego endpointy CSV są dziś za mechanizmem antybotowym (proof-of-work
- * w JavaScripcie), więc nie da się z nich korzystać programowo bez obchodzenia
- * zabezpieczenia. GPW pokrywa Yahoo przez sufiks `.WA`.
+ * Yahoo jest źródłem podstawowym dla akcji, ETF-ów i metali, bo jako jedyne
+ * darmowe pokrywa jednocześnie GPW, giełdy zagraniczne i kontrakty surowcowe.
+ * Stooq stoi za nim jako zapas — jego endpoint historyczny jest za zadaniem
+ * antybotowym, którego nie obchodzimy, ale notowanie bieżące bywa dostępne
+ * i ratuje sytuację, gdy Yahoo milczy.
  */
-const PROVIDERS: PriceProvider[] = [cashProvider, nbpGoldProvider, coingeckoProvider, yahooProvider];
+const PROVIDERS: PriceProvider[] = [
+  cashProvider,
+  nbpGoldProvider,
+  coingeckoProvider,
+  yahooProvider,
+  stooqProvider,
+];
 
 /** Po tylu porażkach z rzędu dostawca jest wyłączany na `COOLDOWN_MINUTES`. */
 const FAILURE_THRESHOLD = 5;

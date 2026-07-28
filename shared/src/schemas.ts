@@ -42,6 +42,8 @@ export const portfolioCreateSchema = z.object({
   baseCurrency: currencyCode.default('PLN'),
   broker: z.string().trim().max(80).optional(),
   note: z.string().trim().max(500).optional(),
+  /** Portfel pełniący rolę poduszki finansowej, a nie celu inwestycyjnego. */
+  emergencyFund: z.boolean().optional(),
 });
 
 export const portfolioUpdateSchema = portfolioCreateSchema.partial().extend({

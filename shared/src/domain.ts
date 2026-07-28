@@ -95,11 +95,19 @@ export const ALERT_KIND_LABELS: Record<AlertKind, string> = {
 export const REBALANCE_MODES = ['full', 'buy_only'] as const;
 export type RebalanceMode = (typeof REBALANCE_MODES)[number];
 
-export const ALLOCATION_DIMENSIONS = ['asset_class', 'instrument', 'sector', 'geo', 'currency'] as const;
+export const ALLOCATION_DIMENSIONS = [
+  'asset_class',
+  'equity_split',
+  'instrument',
+  'sector',
+  'geo',
+  'currency',
+] as const;
 export type AllocationDimension = (typeof ALLOCATION_DIMENSIONS)[number];
 
 export const ALLOCATION_DIMENSION_LABELS: Record<AllocationDimension, string> = {
   asset_class: 'Klasa aktywów',
+  equity_split: 'Klasa aktywów (akcje PL/zagr.)',
   instrument: 'Instrument',
   sector: 'Sektor',
   geo: 'Geografia',

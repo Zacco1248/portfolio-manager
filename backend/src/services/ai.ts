@@ -3,7 +3,9 @@ import { AI_DISCLAIMER } from '@portfolio/shared';
 import type { Importance, Sentiment } from '@portfolio/shared';
 import { config } from '../config.js';
 import { errorMessage } from '../lib/errors.js';
+import { fetchJson } from '../lib/http-client.js';
 import { createLogger } from '../lib/logger.js';
+import { apiKeyFor, checkFeature, getAiSettings } from './ai-config.js';
 
 const log = createLogger('ai');
 
@@ -18,16 +20,73 @@ const log = createLogger('ai');
  * a nie doradzanie przy konkretnych pozycjach.
  */
 
-let client: Anthropic | null = null;
+let anthropicClient: Anthropic | null = null;
 
+/**
+ * Czy analiza wiadomości może zadziałać.
+ *
+ * Sama obecność klucza nie wystarcza — funkcja musi być jeszcze włączona
+ * w ustawieniach. Domyślnie jest wyłączona, żeby żadne dane nie opuściły
+ * serwera bez świadomej decyzji.
+ */
 export function isAiEnabled(): boolean {
-  return config.ai.enabled;
+  return checkFeature('news').enabled;
 }
 
-function getClient(): Anthropic | null {
-  if (!config.ai.enabled || !config.ai.apiKey) return null;
-  client ??= new Anthropic({ apiKey: config.ai.apiKey });
-  return client;
+function getAnthropic(): Anthropic | null {
+  const key = apiKeyFor('anthropic');
+  if (!key) return null;
+  anthropicClient ??= new Anthropic({ apiKey: key });
+  return anthropicClient;
+}
+
+/**
+ * Wywołanie modelu niezależne od dostawcy.
+ *
+ * OpenAI wołamy przez zwykły REST, bez dokładania kolejnej biblioteki —
+ * używamy jednego endpointu i nie potrzebujemy niczego poza nim.
+ */
+async function complete(system: string, user: string, maxTokens = 4096): Promise<string | null> {
+  const settings = getAiSettings();
+
+  if (settings.provider === 'openai') {
+    const key = apiKeyFor('openai');
+    if (!key) return null;
+
+    const response = await fetchJson<{ choices?: { message?: { content?: string } }[] }>(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}` },
+        timeoutMs: 60_000,
+        retries: 1,
+        body: {
+          model: settings.model,
+          max_completion_tokens: maxTokens,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+        },
+      },
+    );
+    return response.choices?.[0]?.message?.content ?? null;
+  }
+
+  const anthropic = getAnthropic();
+  if (!anthropic) return null;
+
+  const response = await anthropic.messages.create({
+    model: settings.model,
+    max_tokens: maxTokens,
+    system,
+    messages: [{ role: 'user', content: user }],
+  });
+
+  return response.content
+    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n');
 }
 
 export interface NewsForAnalysis {
@@ -76,8 +135,7 @@ interface RawAnalysis {
  * tańsze niż kilkanaście osobnych.
  */
 export async function analyzeNewsBatch(items: NewsForAnalysis[]): Promise<NewsAnalysis[]> {
-  const anthropic = getClient();
-  if (!anthropic || items.length === 0) return [];
+  if (!checkFeature('news').enabled || items.length === 0) return [];
 
   const payload = items.map((item) => ({
     id: item.id,
@@ -93,18 +151,8 @@ Wiadomości:
 ${JSON.stringify(payload, null, 1)}`;
 
   try {
-    const response = await anthropic.messages.create({
-      model: config.ai.model,
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMessage }],
-    });
-
-    const text = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n');
-
+    const text = await complete(SYSTEM_PROMPT, userMessage);
+    if (!text) return [];
     return parseAnalysisResponse(text, items);
   } catch (err) {
     // Awaria API nie może zatrzymać crona ani zepsuć widoku newsów —
@@ -176,3 +224,51 @@ function normalizeSentiment(value: unknown): Sentiment {
 }
 
 export const aiDisclaimer = AI_DISCLAIMER;
+
+
+const NARRATIVE_PROMPT = `Jesteś asystentem, który komentuje postępy inwestora indywidualnego.
+
+Dostajesz zagregowane liczby o portfelu. Napisz 3-4 zdania po polsku: co się udało, co warto docenić
+i na co zwrócić uwagę. Ton rzeczowy i wspierający, bez euforii i bez straszenia.
+
+Zasady:
+- Nie doradzaj kupna ani sprzedaży czegokolwiek.
+- Nie obiecuj przyszłych wyników. Projekcja to ekstrapolacja tempa, powiedz to wprost, jeśli o niej wspominasz.
+- Nie wymyślaj liczb spoza tych, które dostałeś.
+- Odpowiadasz samym tekstem, bez nagłówków i bez formatowania.`;
+
+export interface NarrativeInput {
+  valuePlnMinor: number;
+  investedPlnMinor: number;
+  gainPlnMinor: number;
+  monthlyContributionPlnMinor: number;
+  projectedIn5YearsPlnMinor: number;
+  emergencyFundCoveredMonths: number | null;
+}
+
+/**
+ * Komentarz do podsumowania. Do modelu trafiają wyłącznie zagregowane kwoty —
+ * bez listy transakcji, nazw instrumentów i historii.
+ */
+export async function generateNarrative(input: NarrativeInput): Promise<string | null> {
+  if (!checkFeature('insights').enabled) return null;
+
+  const zl = (minor: number): string => (minor / 100).toFixed(2);
+  const payload = [
+    `wartość portfela: ${zl(input.valuePlnMinor)} zł`,
+    `wpłacony kapitał: ${zl(input.investedPlnMinor)} zł`,
+    `wynik: ${zl(input.gainPlnMinor)} zł`,
+    `średnia miesięczna wpłata: ${zl(input.monthlyContributionPlnMinor)} zł`,
+    `projekcja na 5 lat przy tym tempie: ${zl(input.projectedIn5YearsPlnMinor)} zł`,
+    input.emergencyFundCoveredMonths === null
+      ? 'poduszka finansowa: nieskonfigurowana'
+      : `poduszka finansowa pokrywa ${input.emergencyFundCoveredMonths} miesięcy wydatków`,
+  ].join('\n');
+
+  try {
+    return await complete(NARRATIVE_PROMPT, payload, 600);
+  } catch (err) {
+    log.warn(`Komentarz AI nieudany: ${errorMessage(err)}`);
+    return null;
+  }
+}

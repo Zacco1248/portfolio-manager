@@ -220,6 +220,53 @@ export const api = {
     testTelegram: () => post<{ ok: boolean; message: string }>('/telegram/test'),
   },
 
+  insights: {
+    get: (portfolioId?: number) =>
+      get<{
+        insights: { kind: string; title: string; detail: string; valuePlnMinor: number | null }[];
+        projection: {
+          points: { year: number; valuePlnMinor: number; contributedPlnMinor: number }[];
+          monthlyContributionPlnMinor: number;
+          assumedAnnualReturnBp: number;
+          returnSource: 'xirr' | 'default';
+          note: string;
+        };
+        emergencyFund: {
+          configured: boolean;
+          currentPlnMinor: number;
+          targetPlnMinor: number;
+          monthlyExpensesPlnMinor: number;
+          targetMonths: number;
+          coveredMonths: number | null;
+          completionBp: number | null;
+          portfolioNames: string[];
+        };
+        narrative: string | null;
+      }>(`/insights${query({ portfolioId })}`),
+  },
+
+  ai: {
+    status: () =>
+      get<{
+        provider: string;
+        model: string;
+        features: { key: string; label: string; description: string; dataSent: string; enabled: boolean; available: boolean; reason: string | null }[];
+        keys: { anthropic: boolean; openai: boolean };
+        suggestedModels: Record<string, { id: string; label: string; hint: string }[]>;
+      }>('/ai'),
+    update: (body: Record<string, unknown>) => patch<unknown>('/ai', body),
+  },
+
+  duplicates: {
+    find: () =>
+      get<{
+        groups: { key: string; portfolioName: string; instrumentSymbol: string | null; tradeDate: string; type: string; amountPlnMinor: number; count: number; excessPlnMinor: number }[];
+        totalExtraTransactions: number;
+        totalExcessPlnMinor: number;
+      }>('/duplicates'),
+    resolve: (keys: string[]) => post<{ ok: boolean; removed: number }>('/duplicates/resolve', { keys }),
+  },
+
   corporate: {
     refresh: () => post<{ ok: boolean; message: string }>('/corporate-actions/refresh'),
     dividendHistory: (instrumentId: number) =>
@@ -236,6 +283,11 @@ export const api = {
     missingHoldings: () => get<{ id: number; symbol: string; name: string }[]>('/holdings/missing'),
     holdings: (instrumentId: number) =>
       get<{ symbol: string; weightBp: number }[]>(`/holdings/${instrumentId}`),
+    classify: (force = false) =>
+      post<{ checked: number; updated: number; changes: { symbol: string; from: string; to: string }[] }>(
+        '/instruments/classify',
+        { force },
+      ),
     saveHoldings: (instrumentId: number, text: string) =>
       put<{ ok: boolean; saved: number; holdings: { symbol: string; weightBp: number }[] }>(
         `/holdings/${instrumentId}`,

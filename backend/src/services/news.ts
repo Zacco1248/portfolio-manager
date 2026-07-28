@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
-import { parse as parseHtml } from 'node-html-parser';
 import { AI_DISCLAIMER } from '@portfolio/shared';
 import type { Importance, NewsItem, Sentiment } from '@portfolio/shared';
 import { config } from '../config.js';
@@ -10,6 +9,8 @@ import type { InstrumentRow } from '../db/schema.js';
 import { nowIso } from '../lib/dates.js';
 import { errorMessage } from '../lib/errors.js';
 import { fetchText } from '../lib/http-client.js';
+import { parseFeed } from '../lib/rss.js';
+import type { FeedEntry } from '../lib/rss.js';
 import { createLogger } from '../lib/logger.js';
 import { analyzeNewsBatch, isAiEnabled } from './ai.js';
 import { instrumentsNeedingPrices } from './prices.js';
@@ -48,8 +49,9 @@ const SOURCES: FeedSource[] = [
       instrument.exchange === 'WSE' ? 'https://www.bankier.pl/rss/wiadomosci.xml' : null,
   },
   {
-    id: 'stockwatch',
-    urlFor: (instrument) => (instrument.exchange === 'WSE' ? 'https://www.stockwatch.pl/feed/' : null),
+    id: 'bankier-gielda',
+    urlFor: (instrument) =>
+      instrument.exchange === 'WSE' ? 'https://www.bankier.pl/rss/gielda.xml' : null,
   },
 ];
 
@@ -60,59 +62,6 @@ function yahooSymbol(instrument: InstrumentRow): string | null {
   const suffix: Record<string, string> = { WSE: '.WA', LON: '.L', FRA: '.DE', CPH: '.CO', US: '', NASDAQ: '', NYSE: '' };
   const mapped = market === null ? '' : suffix[market];
   return mapped === undefined ? null : `${ticker}${mapped}`;
-}
-
-interface FeedEntry {
-  title: string;
-  url: string;
-  publishedAt: string;
-  summary: string | null;
-}
-
-/** Prosty czytnik RSS/Atom — wystarczający dla kanałów, z których korzystamy. */
-export function parseFeed(xml: string): FeedEntry[] {
-  const root = parseHtml(xml, { comment: false });
-  const nodes = [...root.querySelectorAll('item'), ...root.querySelectorAll('entry')];
-  const entries: FeedEntry[] = [];
-
-  for (const node of nodes) {
-    const title = node.querySelector('title')?.text?.trim();
-    const link =
-      node.querySelector('link')?.text?.trim() || node.querySelector('link')?.getAttribute('href') || '';
-    const pubDate =
-      node.querySelector('pubDate')?.text?.trim() ??
-      node.querySelector('published')?.text?.trim() ??
-      node.querySelector('updated')?.text?.trim() ??
-      '';
-
-    if (!title || !link) continue;
-
-    const parsedDate = pubDate ? new Date(pubDate) : new Date();
-    entries.push({
-      title: decodeEntities(title),
-      url: link,
-      publishedAt: Number.isNaN(parsedDate.getTime()) ? nowIso() : parsedDate.toISOString(),
-      summary: node.querySelector('description')?.text?.trim()
-        ? decodeEntities(stripTags(node.querySelector('description')!.text))
-        : null,
-    });
-  }
-
-  return entries;
-}
-
-function stripTags(text: string): string {
-  return text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-function decodeEntities(text: string): string {
-  return text
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&');
 }
 
 const urlHash = (url: string): string => createHash('sha256').update(url).digest('hex').slice(0, 32);

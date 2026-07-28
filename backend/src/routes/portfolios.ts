@@ -18,6 +18,7 @@ export function toPortfolioDto(row: PortfolioRow): Portfolio {
     baseCurrency: row.baseCurrency,
     broker: row.broker,
     note: row.note,
+    emergencyFund: row.emergencyFund,
     archived: row.archived,
     createdAt: row.createdAt,
   };
@@ -46,6 +47,7 @@ portfoliosRouter.post('/', (req, res, next) => {
       baseCurrency: parsed.data.baseCurrency,
       broker: parsed.data.broker ?? null,
       note: parsed.data.note ?? null,
+      emergencyFund: parsed.data.emergencyFund ?? false,
       sortOrder: maxOrder + 1,
     })
     .returning()
@@ -72,6 +74,7 @@ portfoliosRouter.patch('/:id', (req, res, next) => {
       ...(parsed.data.baseCurrency !== undefined ? { baseCurrency: parsed.data.baseCurrency } : {}),
       ...(parsed.data.broker !== undefined ? { broker: parsed.data.broker } : {}),
       ...(parsed.data.note !== undefined ? { note: parsed.data.note } : {}),
+      ...(parsed.data.emergencyFund !== undefined ? { emergencyFund: parsed.data.emergencyFund } : {}),
       ...(parsed.data.archived !== undefined ? { archived: parsed.data.archived } : {}),
     })
     .where(eq(portfolios.id, id.data))

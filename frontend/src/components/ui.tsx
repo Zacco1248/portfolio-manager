@@ -173,8 +173,8 @@ export function Modal({ title, children, onClose }: { title: string; children: R
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:p-8">
-      <div className="card w-full max-w-2xl">
+    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/60 p-2 sm:p-8">
+      <div className="card my-2 w-full max-w-2xl sm:my-0">
         <header className="flex items-center justify-between border-b border-surface-border px-4 py-3">
           <h2 className="text-sm font-semibold">{title}</h2>
           <button type="button" className="btn btn-ghost px-2 py-1" onClick={onClose} aria-label="Zamknij">
@@ -198,10 +198,21 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 }
 
 /** Tabela z lepkim nagłówkiem i poziomym przewijaniem — kolumn bywa dużo. */
-export function DataTable({ headers, children }: { headers: (string | { label: string; align?: 'right' })[]; children: ReactNode }) {
+export function DataTable({
+  headers,
+  children,
+  minWidth = 640,
+}: {
+  headers: (string | { label: string; align?: 'right' })[];
+  children: ReactNode;
+  /** Szerokość, poniżej której tabela przewija się poziomo zamiast ściskać kolumny. */
+  minWidth?: number;
+}) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[640px] border-collapse">
+    // Przewijanie poziome zamknięte w kontenerze tabeli — strona nigdy nie
+    // przewija się w bok, nawet gdy kolumn jest dużo.
+    <div className="-mx-px overflow-x-auto">
+      <table className="w-full border-collapse" style={{ minWidth }}>
         <thead>
           <tr className="table-head border-b border-surface-border">
             {headers.map((header, index) => {

@@ -9,6 +9,7 @@ const NAV = [
   { to: '/pozycje', label: 'Pozycje' },
   { to: '/transakcje', label: 'Transakcje' },
   { to: '/analiza', label: 'Analiza' },
+  { to: '/postepy', label: 'Postępy' },
   { to: '/rebalans', label: 'Rebalans' },
   { to: '/dywidendy', label: 'Dywidendy' },
   { to: '/obligacje', label: 'Obligacje' },
@@ -32,9 +33,11 @@ export function Layout() {
             type="button"
             className="btn btn-ghost px-2 py-1 lg:hidden"
             onClick={() => setNavOpen((open) => !open)}
-            aria-label="Menu"
+            aria-label={navOpen ? 'Zamknij menu' : 'Otwórz menu'}
+            aria-expanded={navOpen}
+            aria-controls="menu-glowne"
           >
-            ☰
+            {navOpen ? '✕' : '☰'}
           </button>
 
           <span className="text-sm font-semibold tracking-tight">Portfolio Manager</span>
@@ -42,7 +45,7 @@ export function Layout() {
           {/* Przełącznik portfela — użytkownik prowadzi kilka rachunków
               o różnych reżimach podatkowych, więc to najważniejsza kontrolka. */}
           <select
-            className="input h-8 w-auto min-w-[11rem] py-0"
+            className="input h-8 w-auto min-w-0 max-w-[12rem] flex-1 py-0 sm:min-w-[11rem] sm:flex-none"
             value={selectedPortfolioId}
             onChange={(e) => selectPortfolio(Number(e.target.value))}
             aria-label="Wybór portfela"
@@ -56,13 +59,13 @@ export function Layout() {
             ))}
           </select>
 
-          <div className="ml-auto flex items-center gap-3 text-2xs text-content-muted">
+          <div className="ml-auto flex items-center gap-2 text-2xs text-content-muted sm:gap-3">
             {status && (
-              <>
-                <span title="Ostatnia aktualizacja cen">Ceny: {relativeTime(status.lastPriceUpdate)}</span>
-                {!status.features.ai && <span title="Brak ANTHROPIC_API_KEY">AI: wył.</span>}
-                {!status.features.telegram && <span title="Brak konfiguracji Telegrama">Telegram: wył.</span>}
-              </>
+              // Znaczniki stanu są dodatkiem — na wąskim ekranie ustępują miejsca
+              // przełącznikowi portfela i przyciskom.
+              <span className="hidden md:inline" title="Ostatnia aktualizacja cen">
+                Ceny: {relativeTime(status.lastPriceUpdate)}
+              </span>
             )}
             <button type="button" className="btn btn-ghost px-2 py-1" onClick={toggleTheme} aria-label="Zmień motyw">
               {theme === 'dark' ? '☾' : '☀'}
@@ -74,8 +77,11 @@ export function Layout() {
         </div>
       </header>
 
-      <div className="flex flex-1">
+      {/* Na wąskim ekranie nawigacja układa się nad treścią, nie obok niej —
+          w układzie wierszowym zajmowała całą szerokość i wypychała stronę. */}
+      <div className="flex flex-1 flex-col lg:flex-row">
         <nav
+          id="menu-glowne"
           className={`${navOpen ? 'block' : 'hidden'} w-full shrink-0 border-b border-surface-border bg-surface-raised p-2 lg:block lg:w-48 lg:border-b-0 lg:border-r`}
         >
           <ul className="space-y-0.5">

@@ -15,6 +15,13 @@
       "when": 1785189707457,
       "tag": "0001_corporate_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785225300270,
+      "tag": "0002_emergency_fund",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { errorMessage } from '../lib/errors.js';
 import { asyncHandler } from '../lib/http.js';
 import { activePortfolioIds, buildPositions } from '../services/positions.js';
 import { instrumentsNeedingPrices, refreshQuotes } from '../services/prices.js';
@@ -28,12 +29,41 @@ positionsRouter.get('/', (req, res, next) => {
   });
 });
 
-/** Ręczne wymuszenie odświeżenia cen — przycisk w UI obok znacznika czasu. */
+/**
+ * Ręczne wymuszenie odświeżenia cen.
+ *
+ * Każdy etap jest odporny na własną awarię: niedostępny NBP nie może
+ * zablokować pobrania notowań, a brak notowań nie może wywrócić odpowiedzi.
+ * Interfejs dostaje wtedy częściowy wynik z opisem, co się nie udało.
+ */
 positionsRouter.post(
   '/refresh',
   asyncHandler(async (_req, res) => {
-    const fx = await refreshFxRates();
-    const prices = await refreshQuotes(instrumentsNeedingPrices());
-    res.json({ ok: true, fx, prices });
+    const problems: string[] = [];
+
+    let fx = 'pominięto';
+    try {
+      fx = await refreshFxRates();
+    } catch (err) {
+      fx = `błąd: ${errorMessage(err)}`;
+      problems.push('kursy walut');
+    }
+
+    let prices = { updated: 0, failed: 0, skipped: 0 };
+    try {
+      prices = await refreshQuotes(instrumentsNeedingPrices());
+    } catch (err) {
+      problems.push(`notowania (${errorMessage(err)})`);
+    }
+
+    res.json({
+      ok: problems.length === 0,
+      fx,
+      prices,
+      message:
+        problems.length === 0
+          ? `Zaktualizowano ${prices.updated} notowań, ${prices.skipped} bez danych.`
+          : `Częściowe odświeżenie — nie powiodło się: ${problems.join(', ')}.`,
+    });
   }),
 );

@@ -1,0 +1,1 @@
+ALTER TABLE `portfolios` ADD `emergency_fund` integer DEFAULT false NOT NULL;

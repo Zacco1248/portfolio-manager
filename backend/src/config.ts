@@ -90,6 +90,7 @@ const envSchema = z.object({
   DISABLE_EXTERNAL_FETCH: bool(false),
 
   ANTHROPIC_API_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default('claude-haiku-4-5-20251001'),
   AI_NEWS_BATCH_LIMIT: z.coerce.number().int().min(1).max(500).default(25),
 
@@ -145,8 +146,11 @@ export const config = {
   baseCurrency: env.BASE_CURRENCY.toUpperCase(),
 
   ai: {
-    enabled: Boolean(env.ANTHROPIC_API_KEY),
+    // Obecność klucza znaczy tylko tyle, że funkcje AI *da się* włączyć.
+    // O tym, czy działają, decyduje zgoda zapisana w ustawieniach.
+    enabled: Boolean(env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY),
     apiKey: env.ANTHROPIC_API_KEY,
+    openAiKey: env.OPENAI_API_KEY,
     model: env.ANTHROPIC_MODEL,
     batchLimit: env.AI_NEWS_BATCH_LIMIT,
   },

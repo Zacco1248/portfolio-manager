@@ -16,6 +16,7 @@ const Analysis = lazy(() => import('@/pages/Analysis').then((m) => ({ default: m
 const Bonds = lazy(() => import('@/pages/Bonds').then((m) => ({ default: m.Bonds })));
 const Dividends = lazy(() => import('@/pages/Dividends').then((m) => ({ default: m.Dividends })));
 const Help = lazy(() => import('@/pages/Help').then((m) => ({ default: m.Help })));
+const Insights = lazy(() => import('@/pages/Insights').then((m) => ({ default: m.Insights })));
 const ImportPage = lazy(() => import('@/pages/Import').then((m) => ({ default: m.ImportPage })));
 const InstrumentDetail = lazy(() =>
   import('@/pages/InstrumentDetail').then((m) => ({ default: m.InstrumentDetail })),
@@ -49,6 +50,7 @@ export function App() {
         <Route path="transakcje" element={<Transactions />} />
         <Route path="instrument/:id" element={<InstrumentDetail />} />
         <Route path="analiza" element={<Analysis />} />
+        <Route path="postepy" element={<Insights />} />
         <Route path="rebalans" element={<Rebalance />} />
         <Route path="dywidendy" element={<Dividends />} />
         <Route path="obligacje" element={<Bonds />} />

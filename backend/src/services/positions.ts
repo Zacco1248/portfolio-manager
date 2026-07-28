@@ -5,16 +5,19 @@ import {
   convertMinor,
   mulDiv,
   positionValueMinor,
+  PRICE_SCALE,
   QTY_SCALE,
   shareBp,
 } from '@portfolio/shared';
 import type { AssetClass, Instrument, Position, TransactionType } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
-import { instruments, portfolios, realizedGains, transactions } from '../db/schema.js';
+import { bondHoldings, instruments, portfolios, realizedGains, transactions } from '../db/schema.js';
 import type { InstrumentRow, PortfolioRow } from '../db/schema.js';
 import { computeFifo, groupForFifo, parseGroupKey } from './fifo.js';
 import { getLatestPrice } from './prices.js';
+import { valueBond } from './bonds.js';
+import type { BondKind } from '@portfolio/shared';
 import type { LatestPrice } from './prices.js';
 
 export function toInstrumentDto(row: InstrumentRow): Instrument {
@@ -162,6 +165,11 @@ export function buildPositions(portfolioIds?: number[]): PositionsResult {
     });
   }
 
+  // Obligacje detaliczne nie mają notowań rynkowych, więc nie przechodzą
+  // ścieżką transakcji i cen. Bez doliczenia ich tutaj znikały z wartości
+  // portfela, alokacji i rebalansu, mimo że są realnym aktywem.
+  positions.push(...bondPositions(selected));
+
   const positionsValue = positions.reduce((sum, p) => sum + p.valuePlnMinor, 0);
   const cashTotal = [...cashByPortfolio.values()].reduce((sum, v) => sum + v, 0);
   const totalValuePlnMinor = positionsValue + cashTotal;
@@ -176,14 +184,83 @@ export function buildPositions(portfolioIds?: number[]): PositionsResult {
 }
 
 /**
+ * Obligacje detaliczne jako pozycje portfela.
+ *
+ * Wycena to wartość wykupu na dziś: kapitał powiększony o narosłe odsetki.
+ * Identyfikator instrumentu jest ujemny, żeby nie kolidował z instrumentami
+ * z tabeli — interfejs po tym poznaje, że nie ma dla niego strony szczegółów.
+ */
+function bondPositions(portfolios: PortfolioRow[]): Position[] {
+  const ids = portfolios.map((p) => p.id);
+  if (ids.length === 0) return [];
+
+  const names = new Map(portfolios.map((p) => [p.id, p.name]));
+
+  return db
+    .select()
+    .from(bondHoldings)
+    .all()
+    .filter((bond) => ids.includes(bond.portfolioId) && bond.redeemedAt === null)
+    .map((bond) => {
+      const valuation = valueBond({
+        kind: bond.kind as BondKind,
+        purchaseDate: bond.purchaseDate,
+        count: bond.count,
+        nominalMinor: bond.nominalMinor,
+        firstYearRateBp: bond.firstYearRateBp,
+        marginBp: bond.marginBp,
+        termMonths: bond.termMonths,
+        capitalization: bond.capitalization as 'annual' | 'none',
+      });
+
+      const cost = bond.nominalMinor * bond.count;
+
+      return {
+        portfolioId: bond.portfolioId,
+        portfolioName: names.get(bond.portfolioId) ?? '',
+        instrument: {
+          id: -bond.id,
+          symbol: bond.series,
+          name: `Obligacje ${bond.kind} ${bond.series}`,
+          assetClass: 'bond' as const,
+          currency: 'PLN',
+          isin: null,
+          exchange: null,
+          sector: 'Obligacje skarbowe',
+          country: 'Polska',
+          provider: null,
+          providerSymbol: null,
+          unit: null,
+        },
+        qtyE8: bond.count * 100_000_000,
+        avgPriceE8: bond.nominalMinor * 1_000_000,
+        costPlnMinor: cost,
+        priceE8: Math.round((valuation.currentValueMinor / bond.count) * 1_000_000),
+        valuePlnMinor: valuation.currentValueMinor,
+        unrealizedPlnMinor: valuation.accruedInterestMinor,
+        unrealizedBp: changeBp(valuation.currentValueMinor, cost),
+        dayChangePlnMinor: null,
+        dayChangeBp: null,
+        sharePortfolioBp: 0,
+        // Wartość wynika z parametrów emisji, a nie z notowania — nigdy nie jest nieświeża.
+        priceStale: false,
+        fxRateE6: 1_000_000,
+      };
+    });
+}
+
+/**
  * Średnia cena nabycia w PLN za sztukę. Świadomie w walucie bazowej, a nie
  * w walucie instrumentu — inaczej pozycja kupowana przy różnych kursach
  * pokazywałaby cenę, której nigdy nie zapłacono.
  */
 function averagePriceE8(costPlnMinor: number, qtyE8: number): number {
   if (qtyE8 === 0) return 0;
-  // koszt w groszach → cena w skali e8: (cost / 100) / (qty / 1e8) × 1e8
-  return bigintToNumber(mulDiv(BigInt(costPlnMinor) * QTY_SCALE, 1_000_000n, BigInt(qtyE8) * 100n));
+  // Koszt jest w groszach, ilość w skali 1e8, a wynik ma być ceną w skali 1e8:
+  //   cena = (koszt / 100) / (ilość / 1e8)  →  ×1e8  =  koszt × 1e16 / (ilość × 100)
+  // Wcześniej mnożnik wynosił 1e6 zamiast 1e8, przez co cena wychodziła
+  // stukrotnie za niska (116,95 zł na 0,7677 szt. pokazywało 1,52 zamiast 152,34).
+  return bigintToNumber(mulDiv(BigInt(costPlnMinor) * QTY_SCALE, PRICE_SCALE, BigInt(qtyE8) * 100n));
 }
 
 /** Suma zysków zrealizowanych dla wskazanych portfeli. */

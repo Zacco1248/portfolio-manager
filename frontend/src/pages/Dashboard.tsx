@@ -95,6 +95,8 @@ export function Dashboard() {
 
       <WarningList warnings={warnings} />
 
+      <EmergencyFundCard portfolioId={portfolioId} />
+
       <div className="grid gap-4 xl:grid-cols-3">
         <Card title="Wartość portfela w czasie" className="xl:col-span-2">
           <ValueChart history={history} />
@@ -140,6 +142,78 @@ export function Dashboard() {
         )}
       </Card>
     </div>
+  );
+}
+
+/**
+ * Poduszka finansowa na pulpicie.
+ *
+ * Pokazujemy ją osobno od wyniku inwestycyjnego, bo pełni inną rolę: nie ma
+ * zarabiać, tylko wystarczyć na określoną liczbę miesięcy wydatków.
+ */
+function EmergencyFundCard({ portfolioId }: { portfolioId: number | undefined }) {
+  const { data } = useAsync(() => api.insights.get(portfolioId), [portfolioId]);
+  const fund = data?.emergencyFund;
+
+  if (!fund) return null;
+
+  if (!fund.configured) {
+    return (
+      <div className="rounded-card border border-surface-border bg-surface-overlay px-4 py-3 text-2xs text-content-muted">
+        Nie oznaczono żadnego portfela jako poduszki finansowej. Zrobisz to w{' '}
+        <Link className="text-accent hover:underline" to="/ustawienia">
+          Ustawieniach
+        </Link>
+        , a wtedy zostanie wyłączona z propozycji rebalansu i pokaże, na ile miesięcy wydatków wystarcza.
+      </div>
+    );
+  }
+
+  const complete = (fund.completionBp ?? 0) >= 10_000;
+
+  return (
+    <Card title="Poduszka finansowa">
+      <div className="grid gap-3 p-4 pt-2 sm:grid-cols-4">
+        <div>
+          <div className="text-2xs uppercase tracking-wide text-content-muted">Zgromadzone</div>
+          <div className="tabular mt-0.5 text-lg font-semibold">{formatPln(fund.currentPlnMinor)}</div>
+        </div>
+        <div>
+          <div className="text-2xs uppercase tracking-wide text-content-muted">Cel</div>
+          <div className="tabular mt-0.5 text-lg">
+            {fund.targetPlnMinor > 0 ? formatPln(fund.targetPlnMinor) : '—'}
+          </div>
+        </div>
+        <div>
+          <div className="text-2xs uppercase tracking-wide text-content-muted">Pokrycie</div>
+          <div className={`tabular mt-0.5 text-lg font-semibold ${complete ? 'text-gain' : ''}`}>
+            {fund.coveredMonths === null ? '—' : `${fund.coveredMonths} mies.`}
+          </div>
+        </div>
+        <div>
+          <div className="text-2xs uppercase tracking-wide text-content-muted">Portfele</div>
+          <div className="mt-0.5 truncate text-sm text-content-secondary">{fund.portfolioNames.join(', ')}</div>
+        </div>
+      </div>
+
+      {fund.completionBp !== null && (
+        <div className="px-4 pb-4">
+          <div className="h-2 overflow-hidden rounded-full bg-surface-overlay">
+            <div
+              className={`h-full rounded-full ${complete ? 'bg-gain' : 'bg-accent'}`}
+              style={{ width: `${Math.min(fund.completionBp / 100, 100)}%` }}
+            />
+          </div>
+          <p className="mt-1.5 text-2xs text-content-muted">
+            {fund.monthlyExpensesPlnMinor === 0
+              ? 'Podaj miesięczne wydatki w Ustawieniach, żeby zobaczyć pokrycie w miesiącach.'
+              : complete
+                ? `Cel ${fund.targetMonths} miesięcy osiągnięty.`
+                : `Do celu ${fund.targetMonths} miesięcy brakuje ${formatPln(Math.max(fund.targetPlnMinor - fund.currentPlnMinor, 0))}.`}
+          </p>
+        </div>
+      )}
+    </Card>
   );
 }
 

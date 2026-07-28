@@ -15,7 +15,12 @@ const log = createLogger('provider:yahoo');
  * na metale. Format bywa zmieniany bez zapowiedzi, dlatego każdy odczyt jest
  * defensywny, a rejestr dostawców ma fallback.
  */
-const BASE = 'https://query1.finance.yahoo.com/v8/finance/chart';
+/**
+ * Dwa równoważne hosty tego samego API. Awarie bywają jednostronne, więc przy
+ * błędzie pierwszego próbujemy drugiego, zanim uznamy brak danych.
+ */
+const HOSTS = ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com'];
+const CHART_PATH = '/v8/finance/chart';
 
 /** Mapowanie naszych prefiksów rynków na sufiksy Yahoo. */
 const MARKET_SUFFIX: Record<string, string> = {
@@ -118,15 +123,27 @@ interface YahooChartResponse {
 }
 
 async function fetchChart(symbol: string, range: string, interval = '1d'): Promise<YahooChartResponse> {
-  const url = `${BASE}/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
-  return fetchJson<YahooChartResponse>(url, {
-    // Yahoo bywa wybredne wobec klientów bez przeglądarkowych nagłówków.
-    headers: {
-      Accept: 'application/json',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-    minIntervalMs: 400,
-  });
+  const query = `${CHART_PATH}/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
+  let lastError: unknown;
+
+  for (const host of HOSTS) {
+    try {
+      return await fetchJson<YahooChartResponse>(`${host}${query}`, {
+        // Yahoo bywa wybredne wobec klientów bez przeglądarkowych nagłówków.
+        headers: {
+          Accept: 'application/json',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        minIntervalMs: 400,
+        retries: 1,
+      });
+    } catch (err) {
+      lastError = err;
+      log.debug(`${host} nie odpowiedział dla ${symbol}, próbuję kolejnego hosta`);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(`Yahoo nie odpowiedział dla ${symbol}`);
 }
 
 /**

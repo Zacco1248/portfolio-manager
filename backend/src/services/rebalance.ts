@@ -36,11 +36,40 @@ export interface RebalanceInput {
   contributionPlnMinor: number;
 }
 
+/**
+ * Akcje i ETF-y rozbite na krajowe i zagraniczne.
+ *
+ * Dla portfela prowadzonego w złotych to rozróżnienie jest istotniejsze niż
+ * sam podział na akcje i fundusze: decyduje o ekspozycji walutowej i o tym,
+ * czy dywidendy wymagają rozliczania podatku u źródła. Sumują się z powrotem
+ * do klasy nadrzędnej, więc cel „60% akcji" da się rozpisać na dwa składniki.
+ */
+export const EQUITY_SUBCLASSES: Record<string, { parent: string; label: string }> = {
+  stock_pl: { parent: 'stock', label: 'Akcje polskie' },
+  stock_foreign: { parent: 'stock', label: 'Akcje zagraniczne' },
+  etf_pl: { parent: 'etf', label: 'ETF-y polskie' },
+  etf_foreign: { parent: 'etf', label: 'ETF-y zagraniczne' },
+};
+
+const DOMESTIC_MARKETS = new Set(['WSE', 'GPW']);
+
+function isDomestic(position: Position): boolean {
+  if (position.instrument.exchange && DOMESTIC_MARKETS.has(position.instrument.exchange)) return true;
+  if (position.instrument.symbol.startsWith('WSE:')) return true;
+  // Instrument bez rynku, ale notowany w złotych, też traktujemy jak krajowy.
+  return position.instrument.exchange === null && position.instrument.currency === 'PLN';
+}
+
 /** Klucz wymiaru dla pozycji — po czym grupujemy alokację. */
 export function dimensionKey(position: Position, dimension: AllocationDimension): string {
   switch (dimension) {
     case 'asset_class':
       return position.instrument.assetClass;
+    case 'equity_split': {
+      const assetClass = position.instrument.assetClass;
+      if (assetClass !== 'stock' && assetClass !== 'etf') return assetClass;
+      return `${assetClass}_${isDomestic(position) ? 'pl' : 'foreign'}`;
+    }
     case 'instrument':
       return position.instrument.symbol;
     case 'sector':
@@ -55,7 +84,10 @@ export function dimensionKey(position: Position, dimension: AllocationDimension)
 }
 
 function labelFor(key: string, dimension: AllocationDimension): string {
-  if (dimension === 'asset_class') return ASSET_CLASS_LABELS[key as AssetClass] ?? key;
+  if (dimension === 'equity_split' && EQUITY_SUBCLASSES[key]) return EQUITY_SUBCLASSES[key]!.label;
+  if (dimension === 'asset_class' || dimension === 'equity_split') {
+    return ASSET_CLASS_LABELS[key as AssetClass] ?? key;
+  }
   return key === 'unknown' ? 'Nieprzypisane' : key;
 }
 
@@ -71,7 +103,12 @@ export function currentValues(
     values.set(key, (values.get(key) ?? 0) + position.valuePlnMinor);
   }
   if (cashPlnMinor !== 0) {
-    const cashKey = dimension === 'asset_class' ? 'cash' : dimension === 'currency' ? 'PLN' : 'unknown';
+    const cashKey =
+      dimension === 'asset_class' || dimension === 'equity_split'
+        ? 'cash'
+        : dimension === 'currency'
+          ? 'PLN'
+          : 'unknown';
     values.set(cashKey, (values.get(cashKey) ?? 0) + cashPlnMinor);
   }
   return values;

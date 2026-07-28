@@ -15,10 +15,16 @@ import {
 } from '@portfolio/shared';
 import type { AlertKind, RebalanceResponse } from '@portfolio/shared';
 import { db } from '../db/index.js';
-import { alerts, instruments } from '../db/schema.js';
+import { alerts, instruments, portfolios } from '../db/schema.js';
 import { notFound } from '../lib/errors.js';
 import { asyncHandler } from '../lib/http.js';
 import { evaluateAlerts, recentAlertEvents } from '../services/alerts.js';
+import { AI_FEATURES, AI_PROVIDERS, aiStatus, updateAiSettings } from '../services/ai-config.js';
+import { classifyAll } from '../services/classify.js';
+import { duplicateSummary } from '../services/duplicates.js';
+import { deleteTransaction } from '../services/transactions.js';
+import { buildInsights, buildProjection, emergencyFundStatus } from '../services/insights.js';
+import { generateNarrative } from '../services/ai.js';
 import {
   addReportDate,
   deleteReportDate,
@@ -40,7 +46,7 @@ import {
   newsDisclaimer,
   removeFromWatchlist,
 } from '../services/news.js';
-import { activePortfolioIds, buildPositions, toInstrumentDto } from '../services/positions.js';
+import { activePortfolioIds, buildPositions, netInvested, toInstrumentDto } from '../services/positions.js';
 import { buildPlan } from '../services/rebalance.js';
 import { detectConcentration, detectStalePrices, loadThresholds } from '../services/risk.js';
 import { allSettings, updateSettings } from '../services/settings.js';
@@ -50,12 +56,22 @@ import { testTelegram } from '../services/telegram.js';
 
 export const toolsRouter = Router();
 
+const portfolioQuerySchema = z.object({
+  portfolioId: z.coerce.number().int().positive().optional(),
+});
+
 // ── Rebalans ─────────────────────────────────────────────────
 toolsRouter.get('/rebalance', (req, res, next) => {
   const parsed = rebalanceQuerySchema.safeParse(req.query);
   if (!parsed.success) return next(parsed.error);
 
-  const ids = activePortfolioIds(parsed.data.portfolioId);
+  // Poduszka finansowa nie jest celem inwestycyjnym — wciągnięcie jej do
+  // rebalansu kazałoby „dokupić akcji" za pieniądze trzymane na awarie.
+  const emergencyIds = new Set(
+    db.select().from(portfolios).all().filter((p) => p.emergencyFund).map((p) => p.id),
+  );
+  const ids = activePortfolioIds(parsed.data.portfolioId).filter((id) => !emergencyIds.has(id));
+
   const { positions, cashByPortfolio } = buildPositions(ids);
   const cash = [...cashByPortfolio.values()].reduce((sum, v) => sum + v, 0);
   const targets = loadTargets(parsed.data.portfolioId ?? null, parsed.data.dimension);
@@ -384,4 +400,93 @@ toolsRouter.put('/holdings/:instrumentId', (req, res, next) => {
   const entries = parsed.data.holdings ?? (parsed.data.text ? parseHoldingsText(parsed.data.text) : []);
   const saved = setHoldings(id.data, entries);
   res.json({ ok: true, saved, holdings: getHoldings(id.data) });
+});
+
+// ── Podsumowanie osiągnięć i projekcja ───────────────────────
+toolsRouter.get(
+  '/insights',
+  asyncHandler(async (req, res) => {
+    const parsed = portfolioQuerySchema.safeParse(req.query);
+    if (!parsed.success) throw parsed.error;
+
+    const ids = activePortfolioIds(parsed.data.portfolioId);
+    const insights = buildInsights(ids);
+    const projection = buildProjection(ids);
+    const emergencyFund = emergencyFundStatus();
+
+    const { positions, cashByPortfolio } = buildPositions(ids);
+    const value =
+      positions.reduce((sum, p) => sum + p.valuePlnMinor, 0) +
+      [...cashByPortfolio.values()].reduce((sum, v) => sum + v, 0);
+    const invested = netInvested(ids);
+
+    // Komentarz od modelu jest dodatkiem — wszystkie liczby powyżej powstały
+    // lokalnie i nie zmieniają się, gdy AI jest wyłączone.
+    const narrative = await generateNarrative({
+      valuePlnMinor: value,
+      investedPlnMinor: invested,
+      gainPlnMinor: value - invested,
+      monthlyContributionPlnMinor: projection.monthlyContributionPlnMinor,
+      projectedIn5YearsPlnMinor: projection.points.at(-1)?.valuePlnMinor ?? value,
+      emergencyFundCoveredMonths: emergencyFund.coveredMonths,
+    });
+
+    res.json({ insights, projection, emergencyFund, narrative });
+  }),
+);
+
+// ── Ustawienia AI ────────────────────────────────────────────
+toolsRouter.get('/ai', (_req, res) => {
+  res.json(aiStatus());
+});
+
+toolsRouter.patch('/ai', (req, res, next) => {
+  const parsed = z
+    .object({
+      provider: z.enum(AI_PROVIDERS).optional(),
+      model: z.string().trim().min(1).max(80).optional(),
+      features: z.record(z.enum(AI_FEATURES), z.boolean()).optional(),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) return next(parsed.error);
+
+  updateAiSettings(parsed.data);
+  res.json(aiStatus());
+});
+
+// ── Automatyczna klasyfikacja instrumentów ───────────────────
+toolsRouter.post(
+  '/instruments/classify',
+  asyncHandler(async (req, res) => {
+    const force = req.body?.force === true;
+    res.json(await classifyAll({ force }));
+  }),
+);
+
+// ── Wykrywanie zduplikowanych transakcji ─────────────────────
+toolsRouter.get('/duplicates', (_req, res) => {
+  res.json(duplicateSummary());
+});
+
+/**
+ * Usuwa nadmiarowe kopie, zostawiając w każdej grupie najstarszą transakcję.
+ * Nigdy nie kasuje wszystkich wpisów z grupy — duplikat to kopia, a nie powód
+ * do utraty operacji.
+ */
+toolsRouter.post('/duplicates/resolve', (req, res, next) => {
+  const parsed = z.object({ keys: z.array(z.string()).min(1) }).safeParse(req.body);
+  if (!parsed.success) return next(parsed.error);
+
+  const selected = new Set(parsed.data.keys);
+  let removed = 0;
+
+  for (const group of duplicateSummary().groups) {
+    if (!selected.has(group.key)) continue;
+    for (const id of group.transactionIds.slice(1)) {
+      deleteTransaction(id);
+      removed += 1;
+    }
+  }
+
+  res.json({ ok: true, removed });
 });

@@ -30,6 +30,12 @@ export const portfolios = sqliteTable(
     baseCurrency: text('base_currency').notNull().default('PLN'),
     broker: text('broker'),
     note: text('note'),
+    /**
+     * Portfel oznaczony jako poduszka finansowa. Nie jest celem inwestycyjnym,
+     * tylko buforem bezpieczeństwa — dlatego wypada z propozycji rebalansu
+     * i jest liczony osobno względem docelowej liczby miesięcy wydatków.
+     */
+    emergencyFund: integer('emergency_fund', { mode: 'boolean' }).notNull().default(false),
     archived: integer('archived', { mode: 'boolean' }).notNull().default(false),
     sortOrder: integer('sort_order').notNull().default(0),
     createdAt: text('created_at').notNull().default(now),

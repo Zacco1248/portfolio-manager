@@ -31,6 +31,8 @@ export interface Portfolio {
   baseCurrency: string;
   broker: string | null;
   note: string | null;
+  /** Portfel oznaczony jako poduszka finansowa — wyłączony z propozycji rebalansu. */
+  emergencyFund: boolean;
   archived: boolean;
   createdAt: string;
 }
