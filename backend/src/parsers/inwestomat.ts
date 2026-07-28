@@ -8,6 +8,7 @@ import type {
   ColumnMapping,
   ImportParser,
   ParseResult,
+  ParsedBond,
   ParsedRow,
   ParsedSnapshot,
   ParserFileMeta,
@@ -26,6 +27,7 @@ const log = createLogger('parser:inwestomat');
 
 const TRANSACTIONS_SHEET = ['transakcje', 'transactions'];
 const HISTORY_SHEET = ['historia', 'history'];
+const BONDS_SHEET = ['obligacje', 'bonds'];
 
 /** Nagłówek w arkuszu → pole wewnętrzne. Dopasowanie bez znaków diakrytycznych. */
 const COLUMN_ALIASES: Record<string, string[]> = {
@@ -141,10 +143,33 @@ function locateHeader(sheet: XlsxSheet, mapping?: ColumnMapping): HeaderInfo | n
   return null;
 }
 
+/**
+ * Kolumny arkusza „Historia", które są *podsumowaniem*, a nie składnikiem
+ * portfela. Zsumowanie ich razem z klasami aktywów zawyżało wartość portfela
+ * około trzykrotnie: wartość konta liczyła się drugi raz, a do tego dochodziły
+ * wpłaty netto i zysk.
+ */
+const HISTORY_TOTAL_COLUMNS = ['wartosc konta', 'wartosc portfela', 'razem', 'suma'];
+const HISTORY_IGNORED_COLUMNS = [
+  'wplaty netto',
+  'wplaty',
+  'xirr',
+  'zysk / strata',
+  'zysk/strata',
+  'zysk',
+  'strata',
+  'drawdown portfela',
+  'drawdown',
+  'stopa zwrotu',
+];
+
 function readSnapshots(sheet: XlsxSheet): ParsedSnapshot[] {
   const labels = (sheet.rows[0] ?? []).map((cell) => fold(cellText(cell)));
   const dateCol = labels.findIndex((l) => l === 'data');
   if (dateCol === -1) return [];
+
+  const totalCol = labels.findIndex((l) => HISTORY_TOTAL_COLUMNS.includes(l));
+  const depositsCol = labels.findIndex((l) => l === 'wplaty netto' || l === 'wplaty');
 
   const snapshots: ParsedSnapshot[] = [];
 
@@ -153,13 +178,14 @@ function readSnapshots(sheet: XlsxSheet): ParsedSnapshot[] {
     const date = normalizeDate(cellAt(row, dateCol));
     if (!date) continue;
 
-    let total = 0;
+    let sumOfClasses = 0;
     const byAssetClass: Record<string, number> = {};
 
     row.forEach((cell, col) => {
-      if (col === dateCol) return;
+      if (col === dateCol || col === totalCol || col === depositsCol) return;
+
       const label = labels[col];
-      if (!label) return;
+      if (!label || HISTORY_IGNORED_COLUMNS.includes(label)) return;
 
       const raw = cellText(cell);
       if (!raw) return;
@@ -167,15 +193,73 @@ function readSnapshots(sheet: XlsxSheet): ParsedSnapshot[] {
       const minor = toMinor(raw, 'PLN');
       if (minor === 0) return;
 
-      total += minor;
+      sumOfClasses += minor;
       const assetClass = mapAssetClass(label);
       byAssetClass[assetClass] = (byAssetClass[assetClass] ?? 0) + minor;
     });
 
-    if (total !== 0) snapshots.push({ date, valuePlnMinor: total, byAssetClass });
+    // Kolumna sumy jest wiarygodniejsza niż nasze zsumowanie klas — arkusz
+    // może mieć kolumny, których nie rozpoznajemy.
+    const total = totalCol === -1 ? sumOfClasses : toMinor(cellText(cellAt(row, totalCol)), 'PLN');
+    if (total === 0) continue;
+
+    snapshots.push({
+      date,
+      valuePlnMinor: total,
+      investedPlnMinor: depositsCol === -1 ? null : toMinor(cellText(cellAt(row, depositsCol)), 'PLN'),
+      byAssetClass,
+    });
   }
 
   return snapshots;
+}
+
+/**
+ * Arkusz „Obligacje" trzyma warunki emisji per zakup. Stawki są zapisane jako
+ * ułamki (0,0655 zamiast 6,55%), więc przeliczamy je na procenty.
+ */
+function readBonds(sheet: XlsxSheet): ParsedBond[] {
+  const headerRow = sheet.rows.findIndex((row) =>
+    row.some((cell) => fold(cellText(cell)).startsWith('typ obligacji')),
+  );
+  if (headerRow === -1) return [];
+
+  const labels = (sheet.rows[headerRow] ?? []).map((cell) => fold(cellText(cell)));
+  const col = (...names: string[]): number => labels.findIndex((l) => names.some((n) => l.startsWith(n)));
+
+  const kindCol = col('typ obligacji');
+  const dateCol = col('data zakupu');
+  const rateCol = col('% w 1 roku');
+  const marginCol = col('marza w latach', 'marza');
+  const countCol = col('liczba obligacji');
+
+  if (kindCol === -1 || dateCol === -1 || rateCol === -1) return [];
+
+  const out: ParsedBond[] = [];
+
+  for (let r = headerRow + 1; r < sheet.rows.length; r += 1) {
+    const row = sheet.rows[r] ?? [];
+    const kind = cellText(cellAt(row, kindCol)).trim().toUpperCase();
+    const purchaseDate = normalizeDate(cellAt(row, dateCol));
+    if (!kind || !purchaseDate) continue;
+
+    const asPercent = (value: CellValue): number => {
+      const raw = Number(cellText(value).replace(',', '.'));
+      if (!Number.isFinite(raw)) return 0;
+      // Arkusz zapisuje stawki jako ułamki; wartości powyżej 1 są już procentami.
+      return raw <= 1 ? raw * 100 : raw;
+    };
+
+    out.push({
+      kind,
+      purchaseDate,
+      firstYearRatePercent: asPercent(cellAt(row, rateCol)),
+      marginPercent: marginCol === -1 ? 0 : asPercent(cellAt(row, marginCol)),
+      count: countCol === -1 ? 1 : Math.max(Number(cellText(cellAt(row, countCol))) || 1, 1),
+    });
+  }
+
+  return out;
 }
 
 export const inwestomatParser: ImportParser = {
@@ -287,6 +371,14 @@ export const inwestomatParser: ImportParser = {
       notes.push(`Pominięto ${skipped} wierszy bez rozpoznanej daty lub rodzaju transakcji.`);
     }
 
+    const bondsSheet = findSheet(sheets, BONDS_SHEET);
+    const bonds = bondsSheet ? readBonds(bondsSheet) : [];
+    if (bonds.length > 0) {
+      notes.push(
+        `Odczytano warunki emisji ${bonds.length} zakupów obligacji — posłużą do naliczenia odsetek.`,
+      );
+    }
+
     const historySheet = findSheet(sheets, HISTORY_SHEET);
     const snapshots = historySheet ? readSnapshots(historySheet) : [];
     if (snapshots.length > 0) {
@@ -297,6 +389,6 @@ export const inwestomatParser: ImportParser = {
     }
 
     log.info(`Odczytano ${rows.length} transakcji z arkusza Inwestomatu`);
-    return { rows, detectedColumns: header.rawHeaders, snapshots, notes };
+    return { rows, detectedColumns: header.rawHeaders, snapshots, bonds, notes };
   },
 };

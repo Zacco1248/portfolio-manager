@@ -32,11 +32,30 @@ export interface ParsedRow {
 export interface ParsedSnapshot {
   date: IsoDate;
   valuePlnMinor: number;
+  /** Wpłacony kapitał netto na ten dzień, jeśli źródło go podaje. */
+  investedPlnMinor?: number | null;
   byAssetClass?: Record<string, number>;
+}
+
+/**
+ * Parametry emisji obligacji detalicznej odczytane ze źródła.
+ *
+ * Bez nich obligacja stoi w portfelu na nominale i nie nalicza odsetek —
+ * nie ma dla niej notowania rynkowego, więc wartość musi wynikać z warunków
+ * emisji, a nie z ceny.
+ */
+export interface ParsedBond {
+  kind: string;
+  purchaseDate: IsoDate;
+  firstYearRatePercent: number;
+  marginPercent: number;
+  count: number;
 }
 
 export interface ParseResult {
   rows: ParsedRow[];
+  /** Warunki emisji obligacji, jeśli źródło je zawiera. */
+  bonds?: ParsedBond[];
   /** Kolumny wykryte w pliku — potrzebne kreatorowi mapowania. */
   detectedColumns: string[];
   /** Historia wartości portfela, jeśli źródło ją zawiera (arkusz Inwestomatu). */

@@ -46,7 +46,7 @@ function getAnthropic(): Anthropic | null {
  * OpenAI wołamy przez zwykły REST, bez dokładania kolejnej biblioteki —
  * używamy jednego endpointu i nie potrzebujemy niczego poza nim.
  */
-async function complete(system: string, user: string, maxTokens = 4096): Promise<string | null> {
+export async function complete(system: string, user: string, maxTokens = 4096): Promise<string | null> {
   const settings = getAiSettings();
 
   if (settings.provider === 'openai') {

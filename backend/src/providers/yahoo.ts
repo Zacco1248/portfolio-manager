@@ -65,11 +65,19 @@ const METAL_SYMBOLS: Record<string, string> = {
   XAU: 'GC=F',
   GOLD: 'GC=F',
   ZLOTO: 'GC=F',
+  GC: 'GC=F',
+  // Oznaczenia kontraktów używane przez arkusz Inwestomatu (COMEX:SIW00,
+  // COMEX:GCW00) — bez nich metale w ogóle nie dostawały notowania.
+  GCW00: 'GC=F',
   XAG: 'SI=F',
   SILVER: 'SI=F',
   SREBRO: 'SI=F',
+  SI: 'SI=F',
+  SIW00: 'SI=F',
   XPT: 'PL=F',
+  PLW00: 'PL=F',
   XPD: 'PA=F',
+  PAW00: 'PA=F',
 };
 
 export function toYahooSymbol(instrument: ProviderInstrument): string | null {

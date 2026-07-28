@@ -42,16 +42,24 @@ const SOURCES: FeedSource[] = [
         : null;
     },
   },
+  // Kanały zbiorcze polskich serwisów. Filtrujemy je po nazwie spółki, więc
+  // jeden pobrany kanał obsługuje wszystkie krajowe pozycje naraz.
   {
     id: 'bankier',
     urlFor: (instrument) =>
-      // Bankier ma jeden zbiorczy kanał giełdowy — filtrujemy po nazwie spółki.
       instrument.exchange === 'WSE' ? 'https://www.bankier.pl/rss/wiadomosci.xml' : null,
   },
   {
     id: 'bankier-gielda',
-    urlFor: (instrument) =>
-      instrument.exchange === 'WSE' ? 'https://www.bankier.pl/rss/gielda.xml' : null,
+    urlFor: (instrument) => (instrument.exchange === 'WSE' ? 'https://www.bankier.pl/rss/gielda.xml' : null),
+  },
+  {
+    id: 'pb-inwestora',
+    urlFor: (instrument) => (instrument.exchange === 'WSE' ? 'https://www.pb.pl/rss/puls-inwestora.xml' : null),
+  },
+  {
+    id: 'pb-najnowsze',
+    urlFor: (instrument) => (instrument.exchange === 'WSE' ? 'https://www.pb.pl/rss/najnowsze.xml' : null),
   },
 ];
 
@@ -103,7 +111,7 @@ export async function fetchNews(): Promise<string> {
           feedCache.set(url, entries);
         }
 
-        // Kanały zbiorcze (Bankier, StockWatch) filtrujemy po nazwie spółki,
+        // Kanały zbiorcze (Bankier, Puls Biznesu) filtrujemy po nazwie spółki,
         // inaczej każda spółka dostałaby wszystkie wiadomości z rynku.
         const isAggregate = source.id !== 'yahoo';
         const relevant = isAggregate ? entries.filter((e) => mentionsInstrument(e, instrument)) : entries;
@@ -224,7 +232,9 @@ export function listNews(query: NewsQuery): NewsItem[] {
     url: row.url,
     title: row.title,
     publishedAt: row.publishedAt,
-    aiSummaryPl: row.aiSummaryPl,
+    // Bez włączonej analizy AI pokazujemy zajawkę prosto ze źródła — dla
+    // polskich serwisów jest po polsku, więc spełnia tę samą rolę.
+    aiSummaryPl: row.aiSummaryPl ?? shortSummary(row.rawSummary),
     sentiment: row.sentiment as Sentiment | null,
     importance: row.importance as Importance | null,
     aiSignal: row.aiSignal,
@@ -252,4 +262,17 @@ export function listWatchlist(): InstrumentRow[] {
     .innerJoin(watchlist, eq(watchlist.instrumentId, instruments.id))
     .all()
     .map((r) => r.instruments);
+}
+
+/** Skraca zajawkę ze źródła do długości, która mieści się pod tytułem. */
+function shortSummary(raw: string | null): string | null {
+  if (!raw) return null;
+  const text = raw.replace(/\s+/g, ' ').trim();
+  if (text.length === 0) return null;
+  if (text.length <= 240) return text;
+
+  // Ucinamy na granicy zdania, żeby nie zostawiać urwanego słowa.
+  const cut = text.slice(0, 240);
+  const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('? '), cut.lastIndexOf('! '));
+  return lastStop > 120 ? cut.slice(0, lastStop + 1) : `${cut.trimEnd()}…`;
 }

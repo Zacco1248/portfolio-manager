@@ -34,10 +34,26 @@ const COIN_IDS: Record<string, string> = {
   TRX: 'tron',
 };
 
+/** Waluty kwotowania, które bywają doklejone do tickera (BTCPLN, ETHUSD). */
+const QUOTE_SUFFIXES = ['PLN', 'USD', 'EUR', 'USDT'];
+
 export function toCoinId(instrument: ProviderInstrument): string | null {
   if (instrument.provider === 'coingecko' && instrument.providerSymbol) return instrument.providerSymbol;
+
   const { ticker } = splitSymbol(instrument.symbol);
-  return COIN_IDS[ticker.toUpperCase()] ?? null;
+  const upper = ticker.toUpperCase();
+  if (COIN_IDS[upper]) return COIN_IDS[upper];
+
+  // Arkusze zapisują pary jako jeden ciąg (BTCPLN). Obcinamy walutę kwotowania
+  // i próbujemy jeszcze raz — inaczej krypto nie dostaje żadnego notowania.
+  for (const suffix of QUOTE_SUFFIXES) {
+    if (upper.length > suffix.length && upper.endsWith(suffix)) {
+      const base = upper.slice(0, -suffix.length);
+      if (COIN_IDS[base]) return COIN_IDS[base];
+    }
+  }
+
+  return null;
 }
 
 /**

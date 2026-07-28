@@ -189,6 +189,45 @@ function normalize(points: { date: string; value: number }[]): { date: string; i
   return points.map((p) => ({ date: p.date, indexed: Math.round((p.value / base) * 10_000) }));
 }
 
+/**
+ * Stopa zwrotu portfela ważona czasem (TWR), znormalizowana do 100.
+ *
+ * Surowa wartość portfela nie nadaje się do porównania z indeksem: rośnie
+ * głównie dlatego, że dokładasz pieniądze, a nie dlatego, że aktywa drożeją.
+ * Portfel zaczynający od 100 zł i dorastający wpłatami do 5000 zł pokazałby
+ * „+4900%" obok kilkunastu procent benchmarku.
+ *
+ * TWR usuwa wpływ wpłat: dla każdego dnia liczymy zwrot z samej zmiany cen
+ *   r = (wartość_dziś − przepływ_dziś) / wartość_wczoraj − 1
+ * i składamy je w łańcuch. To jest liczba porównywalna z indeksem.
+ */
+function timeWeightedReturn(
+  history: { date: string; valuePlnMinor: number; investedPlnMinor: number }[],
+): { date: string; indexed: number }[] {
+  if (history.length === 0) return [];
+
+  const out: { date: string; indexed: number }[] = [];
+  let index = 10_000; // 100,00 w skali punktów bazowych
+  let previous: { value: number; invested: number } | null = null;
+
+  for (const point of history) {
+    if (previous !== null && previous.value > 0) {
+      const flow = point.investedPlnMinor - previous.invested;
+      const growth = (point.valuePlnMinor - flow) / previous.value;
+      // Skrajne wartości biorą się z dni, w których portfel był prawie pusty —
+      // pojedynczy taki dzień potrafiłby zdominować cały wykres.
+      if (Number.isFinite(growth) && growth > 0 && growth < 3) {
+        index *= growth;
+      }
+    }
+
+    out.push({ date: point.date, indexed: Math.round(index) });
+    previous = { value: point.valuePlnMinor, invested: point.investedPlnMinor };
+  }
+
+  return out;
+}
+
 export function benchmarkSeriesFor(keys: string[], from: IsoDate, to: IsoDate): BenchmarkSeries[] {
   const out: BenchmarkSeries[] = [];
 
@@ -231,7 +270,7 @@ export function buildAnalytics(portfolioIds: number[], from?: IsoDate, to?: IsoD
     portfolioXirr: portfolioXirr(portfolioIds),
     positionXirr: positionXirr(portfolioIds),
     benchmarks: benchmarkSeriesFor(benchmarks ?? ['WIG20TR', 'SP500'], start, end),
-    portfolioIndexed: normalize(history.map((h) => ({ date: h.date, value: h.valuePlnMinor }))),
+    portfolioIndexed: timeWeightedReturn(history),
   };
 }
 

@@ -7,13 +7,13 @@ import type {
   TransactionCreateInput,
 } from '@portfolio/shared';
 import { db } from '../db/index.js';
-import { importBatches, portfolios } from '../db/schema.js';
+import { importBatches, instruments, portfolios } from '../db/schema.js';
 import { nowIso } from '../lib/dates.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { errorMessage } from '../lib/errors.js';
 import { createLogger } from '../lib/logger.js';
 import { detectParser, parserById } from '../parsers/registry.js';
-import type { ColumnMapping, ParsedRow } from '../parsers/types.js';
+import type { ColumnMapping, ParsedBond, ParsedRow } from '../parsers/types.js';
 import { parserAliasSource } from '../parsers/types.js';
 import { resolveInstrument } from './instruments.js';
 import { importSnapshots } from './snapshots.js';
@@ -225,6 +225,12 @@ export async function previewImport(options: PreviewOptions): Promise<ImportPrev
     .returning()
     .get();
 
+  // Warunki emisji obligacji przypisujemy do instrumentów po dacie zakupu —
+  // bez nich obligacja stoi na nominale i nie nalicza odsetek.
+  if (parsed.bonds && parsed.bonds.length > 0) {
+    attachBondTerms(prepared, parsed.bonds);
+  }
+
   // Historia wartości portfela z arkusza trafia do bazy od razu — nie tworzy
   // transakcji, więc nie ma czego zatwierdzać, a nie nadpisuje naszych pomiarów.
   if (parsed.snapshots && parsed.snapshots.length > 0) {
@@ -301,4 +307,42 @@ export function discardImport(batchId: number): void {
   const batch = db.select().from(importBatches).where(eq(importBatches.id, batchId)).get();
   if (!batch) throw notFound('Nie ma takiej partii importu');
   db.update(importBatches).set({ status: 'discarded', rows: null }).where(eq(importBatches.id, batchId)).run();
+}
+
+
+/**
+ * Łączy warunki emisji z instrumentami obligacyjnymi.
+ *
+ * Parametry zapisujemy na instrumencie, a nie jako osobną pozycję obligacyjną —
+ * zakup jest już w transakcjach, więc druga reprezentacja podwoiłaby wartość
+ * portfela. Dopasowanie idzie po dacie zakupu, którą mają obie strony.
+ */
+function attachBondTerms(rows: PreparedImportRow[], bonds: ParsedBond[]): void {
+  const byDate = new Map<string, ParsedBond>();
+  for (const bond of bonds) byDate.set(bond.purchaseDate, bond);
+
+  for (const item of rows) {
+    if (item.instrumentId === null) continue;
+    if (item.row.assetClass !== 'bond' || item.row.type !== 'buy') continue;
+
+    const terms = byDate.get(item.row.tradeDate);
+    if (!terms) continue;
+
+    const instrument = db.select().from(instruments).where(eq(instruments.id, item.instrumentId)).get();
+    if (!instrument) continue;
+
+    db.update(instruments)
+      .set({
+        assetClass: 'bond',
+        meta: {
+          ...(instrument.meta ?? {}),
+          bondKind: terms.kind,
+          purchaseDate: terms.purchaseDate,
+          firstYearRatePercent: terms.firstYearRatePercent,
+          marginPercent: terms.marginPercent,
+        },
+      })
+      .where(eq(instruments.id, item.instrumentId))
+      .run();
+  }
 }

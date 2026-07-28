@@ -22,6 +22,7 @@ import { evaluateAlerts, recentAlertEvents } from '../services/alerts.js';
 import { AI_FEATURES, AI_PROVIDERS, aiStatus, updateAiSettings } from '../services/ai-config.js';
 import { classifyAll } from '../services/classify.js';
 import { duplicateSummary } from '../services/duplicates.js';
+import { buildSuggestions } from '../services/suggestions.js';
 import { deleteTransaction } from '../services/transactions.js';
 import { buildInsights, buildProjection, emergencyFundStatus } from '../services/insights.js';
 import { generateNarrative } from '../services/ai.js';
@@ -490,3 +491,13 @@ toolsRouter.post('/duplicates/resolve', (req, res, next) => {
 
   res.json({ ok: true, removed });
 });
+
+// ── Propozycje uzupełnienia portfela ─────────────────────────
+toolsRouter.get(
+  '/suggestions',
+  asyncHandler(async (req, res) => {
+    const parsed = portfolioQuerySchema.safeParse(req.query);
+    if (!parsed.success) throw parsed.error;
+    res.json(await buildSuggestions(parsed.data.portfolioId));
+  }),
+);

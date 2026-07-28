@@ -124,7 +124,34 @@ export function buildPositions(portfolioIds?: number[]): PositionsResult {
     if (!priceCache.has(instrumentId)) {
       priceCache.set(instrumentId, getLatestPrice(instrumentId, instrument.currency));
     }
-    const price = priceCache.get(instrumentId) ?? null;
+    let price = priceCache.get(instrumentId) ?? null;
+
+    // Obligacje detaliczne nie mają notowania rynkowego. Jeśli znamy warunki
+    // emisji, liczymy wartość wykupu z narosłymi odsetkami — inaczej pozycja
+    // stałaby na nominale i wyglądała na nieaktualną.
+    const bondTerms = readBondTerms(instrument);
+    if (bondTerms && fifo.remainingQtyE8 > 0) {
+      const perUnit = bondTerms.nominalMinor;
+      const valuation = valueBond({
+        kind: bondTerms.kind,
+        purchaseDate: bondTerms.purchaseDate,
+        count: Math.round(fifo.remainingQtyE8 / 100_000_000) || 1,
+        nominalMinor: perUnit,
+        firstYearRateBp: bondTerms.firstYearRateBp,
+        marginBp: bondTerms.marginBp,
+        termMonths: bondTerms.termMonths,
+        capitalization: 'annual',
+      });
+      const units = Math.max(Math.round(fifo.remainingQtyE8 / 100_000_000), 1);
+      price = {
+        priceE8: Math.round((valuation.currentValueMinor / units) * 1_000_000),
+        currency: 'PLN',
+        prevCloseE8: null,
+        ts: new Date().toISOString(),
+        source: 'warunki emisji',
+        stale: false,
+      };
+    }
 
     const quoteCurrency = price?.currency ?? instrument.currency;
     const fxRateE6 = fxRates.get(quoteCurrency.toUpperCase()) ?? 1_000_000;
@@ -181,6 +208,45 @@ export function buildPositions(portfolioIds?: number[]): PositionsResult {
   positions.sort((a, b) => b.valuePlnMinor - a.valuePlnMinor);
 
   return { positions, cashByPortfolio, totalValuePlnMinor };
+}
+
+/** Miesiące trwania emisji wg rodzaju obligacji detalicznej. */
+const BOND_TERM_MONTHS: Record<string, number> = {
+  EDO: 120,
+  COI: 48,
+  TOS: 36,
+  ROR: 12,
+  DOR: 24,
+  ROS: 72,
+  ROD: 144,
+  OTS: 3,
+};
+
+/** Warunki emisji zapisane na instrumencie przy imporcie. */
+function readBondTerms(instrument: InstrumentRow): {
+  kind: BondKind;
+  purchaseDate: string;
+  firstYearRateBp: number;
+  marginBp: number;
+  termMonths: number;
+  nominalMinor: number;
+} | null {
+  if (instrument.assetClass !== 'bond') return null;
+
+  const meta = instrument.meta as Record<string, unknown> | null;
+  const kind = typeof meta?.bondKind === 'string' ? meta.bondKind.toUpperCase() : null;
+  const purchaseDate = typeof meta?.purchaseDate === 'string' ? meta.purchaseDate : null;
+  const rate = typeof meta?.firstYearRatePercent === 'number' ? meta.firstYearRatePercent : null;
+  if (!kind || !purchaseDate || rate === null) return null;
+
+  return {
+    kind: kind as BondKind,
+    purchaseDate,
+    firstYearRateBp: Math.round(rate * 100),
+    marginBp: typeof meta?.marginPercent === 'number' ? Math.round(meta.marginPercent * 100) : 0,
+    termMonths: BOND_TERM_MONTHS[kind] ?? 120,
+    nominalMinor: 10_000,
+  };
 }
 
 /**

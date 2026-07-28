@@ -3,7 +3,7 @@ import { BOND_KINDS } from '@portfolio/shared';
 import type { BondKind } from '@portfolio/shared';
 import { Card, DataTable, EmptyState, ErrorBanner, Field, Spinner, Toast, useToast } from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
-import { formatDate, formatPercent, formatPln } from '@/lib/format';
+import { formatDate, formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
 import { useApp, usePortfolioParam } from '@/state/app';
 
@@ -139,6 +139,7 @@ export function Bonds() {
                 { label: 'Oproc. bieżące', align: 'right' },
                 { label: 'Odsetki', align: 'right' },
                 { label: 'Wartość', align: 'right' },
+                { label: 'Zwrot', align: 'right' },
                 '',
               ]}
             >
@@ -155,6 +156,14 @@ export function Bonds() {
                     <td className="table-cell tabular text-right">{formatPercent(bond.currentPeriodRateBp, { digits: 2 })}</td>
                     <td className="table-cell tabular text-right text-gain">{formatPln(bond.accruedInterestMinor)}</td>
                     <td className="table-cell tabular text-right font-medium">{formatPln(bond.currentValueMinor)}</td>
+                    <td className={`table-cell tabular text-right ${toneClass(bond.accruedInterestMinor)}`}>
+                      {formatPercent(
+                        bond.nominalMinor * bond.count > 0
+                          ? Math.round((bond.accruedInterestMinor / (bond.nominalMinor * bond.count)) * 10_000)
+                          : null,
+                        { sign: true },
+                      )}
+                    </td>
                     <td className="table-cell text-right">
                       <button type="button" className="btn btn-ghost px-2 py-0.5 text-2xs" onClick={() => setExpanded(expanded === bond.id ? null : bond.id)}>
                         {expanded === bond.id ? 'Zwiń' : 'Okresy'}
@@ -166,7 +175,7 @@ export function Bonds() {
                   </tr>
                   {expanded === bond.id && (
                     <tr key={`${bond.id}-periods`}>
-                      <td colSpan={8} className="bg-surface-base px-4 py-2">
+                      <td colSpan={9} className="bg-surface-base px-4 py-2">
                         <table className="w-full text-2xs">
                           <thead className="text-content-muted">
                             <tr>

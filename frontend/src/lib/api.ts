@@ -128,7 +128,10 @@ export const api = {
 
   positions: {
     list: (portfolioId?: number) => get<PositionsResponse>(`/positions${query({ portfolioId })}`),
-    refresh: () => post<{ ok: boolean }>('/positions/refresh'),
+    refresh: () =>
+      post<{ ok: boolean; message?: string; prices?: { updated: number; skipped: number; failed: number } }>(
+        '/positions/refresh',
+      ),
   },
 
   analytics: {
@@ -243,6 +246,23 @@ export const api = {
         };
         narrative: string | null;
       }>(`/insights${query({ portfolioId })}`),
+  },
+
+  suggestions: {
+    get: (portfolioId?: number) =>
+      get<{
+        context: {
+          gaps: { key: string; label: string; currentSharePercent: number; targetSharePercent: number; gapPercent: number }[];
+          overweight: { key: string; label: string; currentSharePercent: number; targetSharePercent: number }[];
+          sectors: { name: string; sharePercent: number }[];
+          regions: { name: string; sharePercent: number }[];
+          missingAssetClasses: string[];
+          concentrated: { symbol: string; sharePercent: number }[];
+        };
+        suggestions: { kind: string; title: string; rationale: string }[];
+        unavailableReason: string | null;
+        disclaimer: string;
+      }>(`/suggestions${query({ portfolioId })}`),
   },
 
   ai: {

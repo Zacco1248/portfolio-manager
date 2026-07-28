@@ -13,6 +13,7 @@ import {
   YAxis,
 } from 'recharts';
 import type { AllocationSlice, SnapshotPoint } from '@portfolio/shared';
+import { RefreshBar } from '@/components/RefreshBar';
 import { Card, EmptyState, ErrorBanner, KpiTile, Spinner, WarningList } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatDate, formatPercent, formatPln, toneClass } from '@/lib/format';
@@ -62,6 +63,8 @@ export function Dashboard() {
 
   return (
     <div className="space-y-4">
+      <RefreshBar />
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-5">
         <KpiTile
           label="Wartość portfela"

@@ -493,18 +493,43 @@ function AiSettingsCard({ onMessage }: { onMessage: (message: string, tone: 'inf
           label="Model"
           hint={suggestions.find((m) => m.id === currentModel)?.hint ?? 'Możesz wpisać dowolny identyfikator modelu.'}
         >
-          <div className="flex gap-2">
-            <input className="input" value={currentModel} onChange={(e) => setModel(e.target.value)} list="modele-ai" />
-            <datalist id="modele-ai">
+          <div className="space-y-2">
+            {/* Rozwijana lista z sugestiami plus pole na dowolny identyfikator —
+                lista podpowiedzi przy zwykłym polu tekstowym bywa niewidoczna. */}
+            <select
+              className="input"
+              value={suggestions.some((m) => m.id === currentModel) ? currentModel : '__wlasny'}
+              onChange={(e) => {
+                if (e.target.value === '__wlasny') setModel('');
+                else save({ model: e.target.value });
+              }}
+            >
               {suggestions.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.label}
+                  {m.label} — {m.hint}
                 </option>
               ))}
-            </datalist>
-            <button type="button" className="btn" disabled={model === null} onClick={() => save({ model: currentModel })}>
-              Zapisz
-            </button>
+              <option value="__wlasny">Inny model (wpisz ręcznie)…</option>
+            </select>
+
+            {!suggestions.some((m) => m.id === currentModel) && (
+              <div className="flex gap-2">
+                <input
+                  className="input"
+                  value={currentModel}
+                  placeholder="identyfikator modelu"
+                  onChange={(e) => setModel(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!currentModel}
+                  onClick={() => save({ model: currentModel })}
+                >
+                  Zapisz
+                </button>
+              </div>
+            )}
           </div>
         </Field>
       </div>

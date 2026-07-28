@@ -134,7 +134,12 @@ export function valueOn(portfolioIds: number[], date: IsoDate): number | null {
  */
 export function importSnapshots(
   portfolioId: number,
-  points: { date: IsoDate; valuePlnMinor: number; byAssetClass?: Record<string, number> }[],
+  points: {
+    date: IsoDate;
+    valuePlnMinor: number;
+    investedPlnMinor?: number | null;
+    byAssetClass?: Record<string, number>;
+  }[],
 ): number {
   if (points.length === 0) return 0;
 
@@ -154,7 +159,9 @@ export function importSnapshots(
       date: p.date,
       valuePlnMinor: p.valuePlnMinor,
       cashPlnMinor: p.byAssetClass?.cash ?? 0,
-      investedPlnMinor: 0,
+      // Wpłacony kapitał z historii jest potrzebny do policzenia stopy zwrotu
+      // ważonej czasem — bez niego nie da się oddzielić wpłat od zysku.
+      investedPlnMinor: p.investedPlnMinor ?? 0,
       realizedPlnMinor: 0,
       unrealizedPlnMinor: 0,
       byAssetClass: p.byAssetClass ?? null,
