@@ -62,3 +62,22 @@ describe('dzienne zwroty portfela', () => {
     ).toHaveLength(0);
   });
 });
+
+describe('przebieg obsunięcia', () => {
+  it('zeruje się na nowym szczycie i pogłębia poniżej niego', () => {
+    // Odtwarzamy tę samą pętlę co riskStats, na wejściu bez wpłat.
+    const growths = [1.1, 0.9, 0.95, 1.5];
+    let index = 1;
+    let peak = 1;
+    const series = growths.map((growth) => {
+      index *= growth;
+      peak = Math.max(peak, index);
+      return Math.round(-(1 - index / peak) * 10_000) || 0;
+    });
+
+    expect(series[0]).toBe(0); // wzrost — nowy szczyt
+    expect(series[1]).toBeLessThan(0); // spadek poniżej szczytu
+    expect(series[2]).toBeLessThan(series[1]!); // pogłębienie
+    expect(series[3]).toBe(0); // wybicie na nowy szczyt
+  });
+});

@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  Area,
+  AreaChart,
   CartesianGrid,
   Legend,
   Line,
@@ -208,6 +210,7 @@ export function Analysis() {
       </Card>
 
       {stats.data && <RiskCard stats={stats.data} />}
+      {stats.data && <DrawdownCard risk={stats.data.risk} />}
       {stats.data && <ContributionCard contributions={stats.data.contributions} />}
 
       <Card title="Stopa zwrotu per pozycja (XIRR)">
@@ -346,6 +349,101 @@ function RiskCard({ stats }: { stats: StatsResponse }) {
       )}
 
       <p className="border-t border-surface-border px-4 py-2 text-2xs text-content-muted">{stats.note}</p>
+    </Card>
+  );
+}
+
+/**
+ * Wykres obsunięcia od szczytu.
+ *
+ * Przebieg wartości portfela pokazuje, ile jest teraz. Ten wykres pokazuje coś
+ * innego: jak głęboko i jak długo portfel bywał pod wodą. Zero to nowy szczyt,
+ * a płaskie odcinki blisko dna mówią więcej o wytrzymałości potrzebnej do
+ * trzymania tej strategii niż jakakolwiek roczna stopa zwrotu.
+ *
+ * Liczone na indeksie TWR, nie na saldzie — inaczej każda wypłata z konta
+ * wyglądałaby jak krach.
+ */
+function DrawdownCard({ risk }: { risk: StatsResponse['risk'] }) {
+  const series = risk.drawdownSeries;
+
+  if (series.length < 2) {
+    return (
+      <Card title="Obsunięcie od szczytu">
+        <p className="px-4 pb-4 pt-2 text-sm text-content-muted">
+          Wykres powstaje z dziennych snapshotów wartości portfela. Mamy ich na razie {risk.observations} —
+          zbierają się codziennie o 23:50, a wcześniejszą historię można wnieść importem arkusza Inwestomatu.
+        </p>
+      </Card>
+    );
+  }
+
+  const deepest = Math.min(...series.map((point) => point.drawdownBp));
+
+  return (
+    <Card
+      title="Obsunięcie od szczytu"
+      action={
+        <span className="text-2xs text-content-muted">
+          Najgłębiej {(deepest / 100).toFixed(1)}%
+          {risk.maxDrawdownFrom ? ` · ${formatDate(risk.maxDrawdownFrom)} → ${formatDate(risk.maxDrawdownTo ?? risk.maxDrawdownFrom)}` : ''}
+        </span>
+      }
+    >
+      <div className="h-56 px-2 pb-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart
+            data={series.map((point) => ({ date: point.date, drawdown: point.drawdownBp / 100 }))}
+            margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
+          >
+            <defs>
+              <linearGradient id="drawdown-fill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="rgb(var(--loss))" stopOpacity={0.05} />
+                <stop offset="100%" stopColor="rgb(var(--loss))" stopOpacity={0.35} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="rgb(var(--surface-border))" strokeDasharray="2 4" vertical={false} />
+            <XAxis
+              dataKey="date"
+              tickFormatter={(v: string) => formatDate(v)}
+              tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+              axisLine={false}
+              tickLine={false}
+              minTickGap={50}
+            />
+            <YAxis
+              domain={[(min: number) => Math.min(min * 1.1, -1), 0]}
+              tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+              axisLine={false}
+              tickLine={false}
+              width={56}
+              tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+            />
+            <ReferenceLine y={0} stroke="rgb(var(--content-muted))" strokeDasharray="3 3" />
+            <Tooltip
+              contentStyle={{
+                background: 'rgb(var(--surface-overlay))',
+                border: '1px solid rgb(var(--surface-border))',
+                borderRadius: 8,
+                fontSize: 12,
+              }}
+              labelFormatter={(label: string) => formatDate(label)}
+              formatter={(value: number) => [`${value.toFixed(2)}%`, 'Poniżej szczytu']}
+            />
+            <Area
+              type="monotone"
+              dataKey="drawdown"
+              stroke="rgb(var(--loss))"
+              strokeWidth={1.6}
+              fill="url(#drawdown-fill)"
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="border-t border-surface-border px-4 py-2 text-2xs text-content-muted">
+        Zero oznacza nowy szczyt wartości. Wykres liczony jest z indeksu ważonego czasem, więc wpłaty
+        i wypłaty go nie zniekształcają — widać wyłącznie zmianę wyceny aktywów.
+      </p>
     </Card>
   );
 }

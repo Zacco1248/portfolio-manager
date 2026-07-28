@@ -350,6 +350,7 @@ export interface StatsResponse {
     positiveDays: number;
     negativeDays: number;
     observations: number;
+    drawdownSeries: { date: string; drawdownBp: number }[];
   };
   concentration: {
     hhi: number;

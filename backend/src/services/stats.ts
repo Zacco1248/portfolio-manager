@@ -28,6 +28,11 @@ export interface RiskStats {
   positiveDays: number;
   negativeDays: number;
   observations: number;
+  /**
+   * Przebieg obsunięcia: dla każdego dnia dystans od dotychczasowego szczytu.
+   * Zero oznacza nowy szczyt, wartości ujemne — ile portfel jest pod wodą.
+   */
+  drawdownSeries: { date: string; drawdownBp: number }[];
 }
 
 export interface ConcentrationStats {
@@ -104,6 +109,7 @@ export function riskStats(portfolioIds: number[]): RiskStats {
     positiveDays: 0,
     negativeDays: 0,
     observations: returns.length,
+    drawdownSeries: [],
   };
 
   if (returns.length < 2) return empty;
@@ -124,6 +130,7 @@ export function riskStats(portfolioIds: number[]): RiskStats {
   let positive = 0;
   let negative = 0;
   const monthly = new Map<string, number>();
+  const drawdownSeries: { date: string; drawdownBp: number }[] = [];
 
   for (const point of returns) {
     index *= point.growth;
@@ -137,6 +144,8 @@ export function riskStats(portfolioIds: number[]): RiskStats {
 
     const depth = 1 - index / peak;
     if (depth > worst.depth) worst = { depth, from: peakDate, to: point.date };
+    // Bez zaokrąglenia w drugą stronę szczyt dawałby -0, co myli przy porównaniach.
+    drawdownSeries.push({ date: point.date, drawdownBp: Math.round(-depth * 10_000) || 0 });
 
     const month = point.date.slice(0, 7);
     monthly.set(month, (monthly.get(month) ?? 1) * point.growth);
@@ -157,6 +166,7 @@ export function riskStats(portfolioIds: number[]): RiskStats {
     positiveDays: positive,
     negativeDays: negative,
     observations: returns.length,
+    drawdownSeries,
   };
 }
 
