@@ -47,35 +47,67 @@ function getAnthropic(): Anthropic | null {
  * OpenAI wołamy przez zwykły REST, bez dokładania kolejnej biblioteki —
  * używamy jednego endpointu i nie potrzebujemy niczego poza nim.
  */
+/** Zapas tokenów na rozumowanie modeli myślących u OpenAI. */
+const REASONING_HEADROOM = 3000;
+
 export async function complete(system: string, user: string, maxTokens = 4096): Promise<string | null> {
+  return (await completeWithMeta(system, user, maxTokens)).text;
+}
+
+export interface CompletionMeta {
+  text: string | null;
+  /**
+   * Powód zakończenia odpowiedzi. Interesuje nas głównie 'length': modele
+   * rozumujące potrafią zużyć cały budżet na rozumowanie i zwrócić pustą treść,
+   * co bez tej informacji wygląda identycznie jak awaria dostawcy.
+   */
+  finishReason: string | null;
+  /** Tokeny zużyte na rozumowanie, jeśli dostawca je raportuje. */
+  reasoningTokens: number | null;
+}
+
+export async function completeWithMeta(system: string, user: string, maxTokens = 4096): Promise<CompletionMeta> {
   const settings = getAiSettings();
+  const empty: CompletionMeta = { text: null, finishReason: null, reasoningTokens: null };
 
   if (settings.provider === 'openai') {
     const key = apiKeyFor('openai');
-    if (!key) return null;
+    if (!key) return empty;
 
-    const response = await fetchJson<{ choices?: { message?: { content?: string } }[] }>(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${key}` },
-        timeoutMs: 60_000,
-        retries: 1,
-        body: {
-          model: settings.model,
-          max_completion_tokens: maxTokens,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user },
-          ],
-        },
+    const response = await fetchJson<{
+      choices?: { message?: { content?: string }; finish_reason?: string }[];
+      usage?: { completion_tokens_details?: { reasoning_tokens?: number } };
+    }>('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}` },
+      timeoutMs: 60_000,
+      retries: 1,
+      body: {
+        model: settings.model,
+        /*
+         * Zapas na rozumowanie. U OpenAI `max_completion_tokens` obejmuje też
+         * tokeny rozumowania, których nie widać w odpowiedzi — bez zapasu model
+         * myślący zjada budżet przeznaczony na treść i zwraca pustkę.
+         * Zapas kosztuje tylko wtedy, gdy zostanie zużyty.
+         */
+        max_completion_tokens: maxTokens + REASONING_HEADROOM,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
       },
-    );
-    return response.choices?.[0]?.message?.content ?? null;
+    });
+
+    const choice = response.choices?.[0];
+    return {
+      text: choice?.message?.content ?? null,
+      finishReason: choice?.finish_reason ?? null,
+      reasoningTokens: response.usage?.completion_tokens_details?.reasoning_tokens ?? null,
+    };
   }
 
   const anthropic = getAnthropic();
-  if (!anthropic) return null;
+  if (!anthropic) return empty;
 
   const response = await anthropic.messages.create({
     model: settings.model,
@@ -84,10 +116,14 @@ export async function complete(system: string, user: string, maxTokens = 4096): 
     messages: [{ role: 'user', content: user }],
   });
 
-  return response.content
-    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-    .map((block) => block.text)
-    .join('\n');
+  return {
+    text: response.content
+      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+      .map((block) => block.text)
+      .join('\n'),
+    finishReason: response.stop_reason ?? null,
+    reasoningTokens: null,
+  };
 }
 
 export interface NewsForAnalysis {
@@ -275,6 +311,12 @@ export async function generateNarrative(input: NarrativeInput): Promise<string |
 }
 
 
+/**
+ * Budżet tokenów testu. Musi pomieścić rozumowanie modelu myślącego, inaczej
+ * test zgłasza awarię tam, gdzie połączenie jest całkiem sprawne.
+ */
+const TEST_TOKEN_BUDGET = 2000;
+
 export interface AiConnectionTest {
   ok: boolean;
   provider: AiProvider;
@@ -311,20 +353,31 @@ export async function testAiConnection(): Promise<AiConnectionTest> {
   const started = Date.now();
 
   try {
-    const reply = await complete(
+    /*
+     * Budżet celowo hojny jak na jedno słowo. Modele rozumujące (GPT-5, o-serie)
+     * najpierw myślą, a dopiero potem piszą — przy ciasnym limicie cały budżet
+     * schodzi na rozumowanie i wraca pusta treść z finish_reason „length".
+     */
+    const result = await completeWithMeta(
       'Odpowiadasz jednym słowem, bez interpunkcji i bez wyjaśnień.',
       'Napisz: dziala',
-      32,
+      TEST_TOKEN_BUDGET,
     );
     const latencyMs = Date.now() - started;
+    const reply = result.text;
 
     if (!reply || reply.trim().length === 0) {
+      const truncated = result.finishReason === 'length' || result.finishReason === 'max_tokens';
       return {
         ...base,
         ok: false,
         latencyMs,
         reply: null,
-        message: 'Dostawca odpowiedział, ale bez treści. Sprawdź, czy wybrany model istnieje i jest dostępny dla Twojego klucza.',
+        message: truncated
+          ? `Połączenie z dostawcą działa i klucz jest poprawny, ale model zużył cały budżet ${TEST_TOKEN_BUDGET} tokenów` +
+            `${result.reasoningTokens ? ` (w tym ${result.reasoningTokens} na rozumowanie)` : ''} i nie zdążył nic napisać. ` +
+            'To typowe dla modeli rozumujących — wybierz lżejszy model albo zignoruj ten wynik, bo pozostałe funkcje mają dużo większe limity.'
+          : 'Dostawca odpowiedział, ale bez treści. Sprawdź, czy wybrany model istnieje i jest dostępny dla Twojego klucza.',
       };
     }
 
