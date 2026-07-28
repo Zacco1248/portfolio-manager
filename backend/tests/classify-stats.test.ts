@@ -45,13 +45,27 @@ describe('dzienne zwroty portfela', () => {
     expect(first?.growth).toBeCloseTo(1, 10);
   });
 
-  it('liczy zwrot ze zmiany cen przy jednoczesnej dopłacie', () => {
+  it('wlicza dopłatę do kapitału pracującego tego dnia', () => {
     const [first] = dailyReturns([
       { date: '2026-01-01', valuePlnMinor: 100_000, investedPlnMinor: 100_000 },
       { date: '2026-01-02', valuePlnMinor: 155_000, investedPlnMinor: 150_000 },
     ]);
-    // 100 000 urosło do 105 000, reszta to wpłata 50 000.
-    expect(first?.growth).toBeCloseTo(1.05, 10);
+    /*
+     * Snapshot powstaje na koniec dnia, więc wpłacone tego dnia 50 000 jest już
+     * w wartości i zdążyło pracować: baza to 150 000, wynik 155 000, czyli
+     * +3,33%. Traktowanie wpłaty jako zdarzenia po zamknięciu dawałoby +5%
+     * i zawyżało zwrot każdego dnia z dopłatą.
+     */
+    expect(first?.growth).toBeCloseTo(155 / 150, 10);
+  });
+
+  it('sama wpłata bez zmiany wyceny daje zwrot zerowy', () => {
+    const [first] = dailyReturns([
+      { date: '2026-01-01', valuePlnMinor: 200_000, investedPlnMinor: 200_000 },
+      { date: '2026-01-03', valuePlnMinor: 260_000, investedPlnMinor: 260_000 },
+    ]);
+    // Weekendowa wpłata: wartość rośnie dokładnie o wpłatę, ceny stoją.
+    expect(first?.growth).toBeCloseTo(1, 10);
   });
 
   it('pomija dni startujące od pustego portfela', () => {

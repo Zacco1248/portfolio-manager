@@ -146,6 +146,14 @@ export function Analysis() {
           })}
         </div>
 
+        <p className="px-4 pb-2 text-2xs text-content-muted">
+          Linia portfela to stopa zwrotu ważona czasem: pokazuje, ile zarobiłaby złotówka trzymana od początku
+          okresu, niezależnie od tego, ile i kiedy dopłacałeś. Dlatego potrafi się rozjechać z XIRR powyżej —
+          jeśli większość kapitału wpłaciłeś po spadku i odrobiłeś go razem z rynkiem, XIRR będzie wysoki,
+          a ta linia niska. To nie sprzeczność, tylko dwie odpowiedzi na dwa różne pytania: „ile zarobiły
+          moje pieniądze" i „jak radził sobie sam portfel".
+        </p>
+
         {chartData.length < 2 ? (
           <p className="px-4 pb-4 text-sm text-content-muted">
             Porównanie wymaga historii wartości portfela. Powstaje ona z dziennych snapshotów — jeśli aplikacja
@@ -348,7 +356,10 @@ function RiskCard({ stats }: { stats: StatsResponse }) {
         </div>
       )}
 
-      <p className="border-t border-surface-border px-4 py-2 text-2xs text-content-muted">{stats.note}</p>
+      <p className="border-t border-surface-border px-4 py-2 text-2xs text-content-muted">
+        {stats.note} Największe obsunięcie bywa głębsze niż najgorszy miesiąc — spadek rozłożony na kilka
+        miesięcy sumuje się, choć żaden z nich z osobna nie był aż tak zły.
+      </p>
     </Card>
   );
 }

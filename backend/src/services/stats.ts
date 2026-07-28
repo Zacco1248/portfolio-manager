@@ -79,7 +79,9 @@ export function dailyReturns(
     if (previous.valuePlnMinor <= 0) continue;
 
     const flow = point.investedPlnMinor - previous.investedPlnMinor;
-    const growth = (point.valuePlnMinor - flow) / previous.valuePlnMinor;
+    // Ten sam wzór co w TWR: przepływ w mianowniku, bo snapshot jest z końca dnia.
+    const base = previous.valuePlnMinor + flow;
+    const growth = base > 0 ? point.valuePlnMinor / base : 0;
     if (!Number.isFinite(growth) || growth <= 0 || growth >= 3) continue;
 
     out.push({ date: point.date, growth });

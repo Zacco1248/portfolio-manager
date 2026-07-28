@@ -198,8 +198,13 @@ function normalize(points: { date: string; value: number }[]): { date: string; i
  * „+4900%" obok kilkunastu procent benchmarku.
  *
  * TWR usuwa wpływ wpłat: dla każdego dnia liczymy zwrot z samej zmiany cen
- *   r = (wartość_dziś − przepływ_dziś) / wartość_wczoraj − 1
+ *   r = wartość_dziś / (wartość_wczoraj + przepływ_dziś) − 1
  * i składamy je w łańcuch. To jest liczba porównywalna z indeksem.
+ *
+ * Przepływ trafia do mianownika, bo snapshot powstaje na koniec dnia — wpłacone
+ * tego dnia pieniądze są już w wartości i zdążyły pracować. Odejmowanie ich od
+ * licznika (wariant „przepływ na koniec okresu") zaniżało zwrot każdego dnia
+ * z dopłatą, a przy regularnych wpłatach błąd kumulował się przez cały wykres.
  */
 function timeWeightedReturn(
   history: { date: string; valuePlnMinor: number; investedPlnMinor: number }[],
@@ -213,7 +218,8 @@ function timeWeightedReturn(
   for (const point of history) {
     if (previous !== null && previous.value > 0) {
       const flow = point.investedPlnMinor - previous.invested;
-      const growth = (point.valuePlnMinor - flow) / previous.value;
+      const base = previous.value + flow;
+      const growth = base > 0 ? point.valuePlnMinor / base : 0;
       // Skrajne wartości biorą się z dni, w których portfel był prawie pusty —
       // pojedynczy taki dzień potrafiłby zdominować cały wykres.
       if (Number.isFinite(growth) && growth > 0 && growth < 3) {
