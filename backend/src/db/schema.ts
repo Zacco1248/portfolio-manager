@@ -628,3 +628,36 @@ export const aiAnalyses = sqliteTable(
     index('ai_analyses_instrument_idx').on(t.instrumentId, t.createdAt),
   ],
 );
+
+/**
+ * Rekomendacje analityków odczytane z prasy giełdowej.
+ *
+ * Trzymamy je osobno od wiadomości, bo mają strukturę: dom maklerski,
+ * zalecenie i cenę docelową. Zapis po adresie artykułu jest unikalny, więc
+ * ponowne pobranie nie mnoży wpisów.
+ */
+export const analystRatings = sqliteTable(
+  'analyst_ratings',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    instrumentId: integer('instrument_id')
+      .notNull()
+      .references(() => instruments.id, { onDelete: 'cascade' }),
+    urlHash: text('url_hash').notNull(),
+    url: text('url').notNull(),
+    title: text('title').notNull(),
+    publishedAt: text('published_at').notNull(),
+    broker: text('broker'),
+    /** kupuj, akumuluj, trzymaj, neutralnie, redukuj, sprzedaj. */
+    rating: text('rating'),
+    targetPriceE8: integer('target_price_e8'),
+    /** Czy wycena została podwyższona czy obniżona. */
+    direction: text('direction'),
+    source: text('source').notNull(),
+    fetchedAt: text('fetched_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('analyst_ratings_url_uq').on(t.urlHash),
+    index('analyst_ratings_instrument_idx').on(t.instrumentId, t.publishedAt),
+  ],
+);

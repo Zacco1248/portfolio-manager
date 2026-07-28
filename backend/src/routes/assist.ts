@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/http.js';
+import { assessFit, buildResearch, searchCompanies } from '../services/research.js';
 import {
   DOCUMENT_LIMIT,
   MOVE_WINDOWS,
@@ -130,3 +131,43 @@ assistRouter.delete('/history/:id', (req, res, next) => {
   deleteAnalysis(id.data);
   res.json({ ok: true });
 });
+
+// ── Wyszukiwarka i przegląd spółki ───────────────────────────
+assistRouter.get(
+  '/search',
+  asyncHandler(async (req, res) => {
+    const parsed = z.object({ q: z.string().trim().min(2).max(60) }).parse(req.query);
+    res.json(await searchCompanies(parsed.q));
+  }),
+);
+
+assistRouter.get(
+  '/research/:id',
+  asyncHandler(async (req, res) => {
+    const id = z.coerce.number().int().positive().parse(req.params.id);
+    const portfolioId = z.coerce.number().int().positive().optional().parse(req.query.portfolioId);
+
+    const snapshot = await buildResearch(id, portfolioId);
+    if (!snapshot) {
+      res.status(404).json({ error: { message: 'Nie ma takiego instrumentu' } });
+      return;
+    }
+    res.json(snapshot);
+  }),
+);
+
+assistRouter.post(
+  '/portfolio-fit',
+  asyncHandler(async (req, res) => {
+    const parsed = z
+      .object({ instrumentId: z.coerce.number().int().positive(), portfolioId: z.coerce.number().int().positive().optional() })
+      .parse(req.body ?? {});
+
+    const result = await assessFit(parsed.instrumentId, parsed.portfolioId);
+    if (!result) {
+      res.status(404).json({ error: { message: 'Nie ma takiego instrumentu' } });
+      return;
+    }
+    res.json(result);
+  }),
+);

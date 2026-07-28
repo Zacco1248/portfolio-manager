@@ -229,6 +229,11 @@ export interface TechnicalIndicators {
   ema26: (number | null)[];
   rsi14: (number | null)[];
   macd: { macd: (number | null)[]; signal: (number | null)[]; histogram: (number | null)[] };
+  bollinger: { upper: (number | null)[]; middle: (number | null)[]; lower: (number | null)[] };
+  atr14: (number | null)[];
+  stochastic: { k: (number | null)[]; d: (number | null)[] };
+  roc20: (number | null)[];
+  obv: (number | null)[];
 }
 
 export interface TechnicalSignal {

@@ -214,6 +214,35 @@ export function Help() {
         </div>
       </Card>
 
+      <Card title="Karta spółki">
+        <div className="space-y-3 p-4 pt-2 text-sm">
+          <p className="text-content-secondary">
+            Zakładka <strong>Spółki</strong> zbiera w jednym miejscu to, co wcześniej wymagało obejścia kilku
+            widoków. Wpisujesz symbol albo nazwę — szuka najpierw wśród Twoich instrumentów, a gdy nic nie
+            znajdzie, pyta dostawcę notowań.
+          </p>
+
+          <Item title="Notowania i technika">
+            Zmiana kursu w pięciu oknach (sesja, tydzień, miesiąc, kwartał, rok) oraz wskaźniki: RSI, układ
+            średnich, wstęgi Bollingera, zmienność ATR, oscylator stochastyczny, momentum 20 sesji i odległość
+            od rocznego maksimum i minimum. Pod spodem lista wykrytych zdarzeń technicznych z datami.
+          </Item>
+
+          <Item title="Rekomendacje analityków">
+            Zalecenia i ceny docelowe odczytane z nagłówków prasy giełdowej (Bankier, Parkiet, Puls Biznesu,
+            StockWatch). Aplikacja pokazuje konsensus, medianę ceny docelowej i potencjał wobec bieżącego kursu.
+            To zapis tego, co napisała prasa — nie stanowisko aplikacji. Odczyt jest automatyczny, więc
+            pojedynczy wpis bywa niepełny; przy każdym jest odnośnik do źródła.
+          </Item>
+
+          <Item title="Dopasowanie do portfela">
+            Po włączeniu funkcji „Dopasowanie do portfela" model zestawia dane waloru ze strukturą Twojego
+            portfela: jaką rolę mógłby pełnić, co poprawia, gdzie zwiększa koncentrację sektorową lub regionalną
+            i czego w tych danych brakuje do decyzji. Nie mówi „kup" ani „nie kupuj".
+          </Item>
+        </div>
+      </Card>
+
       <Card title="Co potrafi asystent">
         <div className="space-y-3 p-4 pt-2 text-sm">
           <p className="text-content-secondary">

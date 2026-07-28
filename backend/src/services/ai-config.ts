@@ -27,6 +27,7 @@ export const AI_FEATURES = [
   'documentSummary',
   'taxAssistant',
   'importMapping',
+  'portfolioFit',
 ] as const;
 export type AiFeature = (typeof AI_FEATURES)[number];
 
@@ -103,6 +104,15 @@ export const AI_FEATURE_INFO: Record<AiFeature, AiFeatureInfo> = {
       'i nazwy portfeli zwolnionych. Bez listy transakcji.',
     description: 'Odpowiada na pytania o Twoje konkretne zestawienie i tłumaczy, skąd biorą się kwoty.',
   },
+  portfolioFit: {
+    key: 'portfolioFit',
+    label: 'Dopasowanie do portfela',
+    dataSent:
+      'Dane rynkowe waloru (zmiany kursu, wskaźniki, konsensus rekomendacji, nagłówki) oraz struktura ' +
+      'Twojego portfela w procentach: sektory, regiony, luki wobec celu i udział tego waloru. Bez kwot.',
+    description:
+      'Ocenia, jaką rolę walor mógłby pełnić w Twoim portfelu i co pogarsza. Nie mówi „kup" ani „nie kupuj".',
+  },
   importMapping: {
     key: 'importMapping',
     label: 'Rozpoznawanie formatu importu',
@@ -143,6 +153,7 @@ const DEFAULT_FEATURES: Record<AiFeature, boolean> = {
   documentSummary: false,
   taxAssistant: false,
   importMapping: false,
+  portfolioFit: false,
 };
 
 export function getAiSettings(): AiSettings {

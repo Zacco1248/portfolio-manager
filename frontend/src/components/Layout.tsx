@@ -10,6 +10,7 @@ const NAV = [
   { to: '/transakcje', label: 'Transakcje' },
   { to: '/analiza', label: 'Analiza' },
   { to: '/postepy', label: 'Postępy' },
+  { to: '/spolki', label: 'Spółki' },
   { to: '/asystent', label: 'Asystent' },
   { to: '/rebalans', label: 'Rebalans' },
   { to: '/dywidendy', label: 'Dywidendy' },

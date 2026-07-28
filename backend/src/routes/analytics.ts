@@ -114,7 +114,7 @@ analyticsRouter.get('/technical', (req, res, next) => {
     candles,
     indicators,
     signals: detectSignals(candles, indicators),
-    state: currentState(indicators),
+    state: currentState(indicators, candles),
   };
 
   res.json(response);

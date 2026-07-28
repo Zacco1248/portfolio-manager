@@ -1,4 +1,5 @@
 import type {
+  Candle,
   Alert,
   AlertEvent,
   AnalyticsResponse,
@@ -223,6 +224,20 @@ export const api = {
       post<AssistResult<{ characters: number; truncated: boolean }>>('/assist/document', { text }),
     tax: (body: { portfolioId?: number; year: number; question: string }) =>
       post<AssistResult<TaxAssistantFacts>>('/assist/tax', body),
+    search: (q: string) =>
+      get<{ id: number | null; symbol: string; name: string; assetClass: string; exchange: string | null; known: boolean }[]>(
+        `/assist/search${query({ q })}`,
+      ),
+    research: (instrumentId: number, portfolioId?: number) =>
+      get<ResearchSnapshot>(`/assist/research/${instrumentId}${query({ portfolioId })}`),
+    fit: (instrumentId: number, portfolioId?: number) =>
+      post<{
+        snapshot: ResearchSnapshot;
+        text: string | null;
+        unavailableReason: string | null;
+        disclaimer: string;
+        usage?: { provider: string; model: string; costMicroUsd: number | null };
+      }>('/assist/portfolio-fit', { instrumentId, portfolioId }),
     history: (params: { kind?: string; instrumentId?: number; limit?: number }) =>
       get<SavedAnalysis[]>(`/assist/history${query(params)}`),
     removeHistory: (id: number) => del<{ ok: boolean }>(`/assist/history/${id}`),
@@ -474,4 +489,44 @@ export interface SuggestionContext {
   regions: { name: string; sharePercent: number }[];
   missingAssetClasses: string[];
   concentrated: { symbol: string; sharePercent: number }[];
+}
+
+/** Przegląd spółki: notowania, technika, rekomendacje, wiadomości, udział w portfelu. */
+export interface ResearchSnapshot {
+  instrument: Instrument;
+  priceE8: number | null;
+  changes: { days: number; changeBp: number | null }[];
+  technical: {
+    rsi: number | null;
+    rsiZone: string | null;
+    trend: string | null;
+    macdHistogram: number | null;
+    bollingerPercent: number | null;
+    atrPercent: number | null;
+    stochasticK: number | null;
+    stochasticZone: string | null;
+    momentum20: number | null;
+    fromYearHighPercent: number | null;
+    fromYearLowPercent: number | null;
+  };
+  signals: { date: string; label: string; detail: string }[];
+  ratings: {
+    entries: {
+      date: string;
+      broker: string | null;
+      rating: string | null;
+      targetPriceE8: number | null;
+      direction: 'up' | 'down' | null;
+      title: string;
+      url: string;
+    }[];
+    counts: Record<string, number>;
+    scoreAvg: number | null;
+    medianTargetE8: number | null;
+    upsideBp: number | null;
+    monthsCovered: number;
+  };
+  news: { title: string; publishedAt: string; source: string; url: string }[];
+  holding: { held: boolean; shareBp: number; valuePlnMinor: number } | null;
+  candles: Candle[];
 }

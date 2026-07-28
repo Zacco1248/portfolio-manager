@@ -4,6 +4,7 @@ import { writeDailySnapshot } from '../services/snapshots.js';
 import { evaluateAlerts } from '../services/alerts.js';
 import { refreshDividendHistory } from '../services/corporate-actions.js';
 import { analyzePendingNews, fetchNews } from '../services/news.js';
+import { refreshAllRecommendations } from '../services/recommendations.js';
 import { refreshFxRates } from '../services/fx.js';
 import { instrumentsNeedingPrices, isMarketHours, refreshQuotes } from '../services/prices.js';
 import type { ScheduleFn } from './index.js';
@@ -41,6 +42,13 @@ export function registerDataJobs(schedule: ScheduleFn): void {
 
   // Alerty sprawdzamy częściej niż newsy, ale rzadziej niż ceny.
   schedule('alerts:check', '*/15 * * * *', config.cron.alerts, async () => evaluateAlerts());
+
+  /*
+   * Rekomendacje wychodzą w cyklu raportowym, nie codziennie — raz na dobę
+   * z zapasem. Pobranie jest tanie, ale idzie przez wyszukiwarkę wiadomości,
+   * więc nie ma powodu robić tego częściej.
+   */
+  schedule('recommendations:refresh', '20 6 * * 1-5', config.cron.news, async () => refreshAllRecommendations());
 
   // Zdarzenia korporacyjne zmieniają się rzadko — raz na dobę wystarczy.
   schedule('dividends:history', '40 23 * * *', config.cron.snapshot, async () => refreshDividendHistory());
