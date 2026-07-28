@@ -215,8 +215,8 @@ export const api = {
   assist: {
     monthlySummary: (body: { portfolioId?: number; month?: string }) =>
       post<AssistResult<MonthlyFacts>>('/assist/monthly-summary', body),
-    priceMove: (instrumentId: number) =>
-      post<AssistResult<PriceMoveFacts | null>>('/assist/price-move', { instrumentId }),
+    priceMove: (instrumentId: number, days?: number) =>
+      post<AssistResult<PriceMoveFacts | null>>('/assist/price-move', { instrumentId, days }),
     purchaseCheck: (body: { portfolioId?: number; symbol: string; amount: string }) =>
       post<AssistResult<PurchaseCheckFacts>>('/assist/purchase-check', body),
     document: (text: string) =>

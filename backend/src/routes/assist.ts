@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/http.js';
 import {
   DOCUMENT_LIMIT,
+  MOVE_WINDOWS,
   deleteAnalysis,
   listAnalyses,
   explainPriceMove,
@@ -41,8 +42,16 @@ assistRouter.post(
 assistRouter.post(
   '/price-move',
   asyncHandler(async (req, res) => {
-    const parsed = z.object({ instrumentId: z.coerce.number().int().positive() }).parse(req.body ?? {});
-    res.json(await explainPriceMove(parsed.instrumentId));
+    const parsed = z
+      .object({
+        instrumentId: z.coerce.number().int().positive(),
+        /** Okno analizy w dniach; 1 oznacza zmianę z ostatniej sesji. */
+        days: z
+          .union(MOVE_WINDOWS.map((value) => z.literal(value)) as [z.ZodLiteral<1>, z.ZodLiteral<7>, z.ZodLiteral<14>, z.ZodLiteral<30>])
+          .optional(),
+      })
+      .parse(req.body ?? {});
+    res.json(await explainPriceMove(parsed.instrumentId, parsed.days));
   }),
 );
 

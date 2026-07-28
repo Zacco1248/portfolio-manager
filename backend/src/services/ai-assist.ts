@@ -347,14 +347,18 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Okno, w którym szukamy przyczyn ruchu ceny. */
-const MOVE_WINDOW_DAYS = 14;
+/** Okna, w których można szukać przyczyn ruchu ceny. */
+export const MOVE_WINDOWS = [1, 7, 14, 30] as const;
+export type MoveWindow = (typeof MOVE_WINDOWS)[number];
 
-export function priceMoveFacts(instrumentId: number): PriceMoveFacts | null {
+/** Okno domyślne — dość długie, by objąć wątek, dość krótkie, by nie zlewać kilku. */
+const DEFAULT_WINDOW: MoveWindow = 14;
+
+export function priceMoveFacts(instrumentId: number, days: MoveWindow = DEFAULT_WINDOW): PriceMoveFacts | null {
   const instrument = db.select().from(instruments).where(eq(instruments.id, instrumentId)).get();
   if (!instrument) return null;
 
-  const from = addDays(today(config.timezone), -MOVE_WINDOW_DAYS);
+  const from = addDays(today(config.timezone), -days);
 
   const candles = db
     .select()
@@ -404,7 +408,7 @@ export function priceMoveFacts(instrumentId: number): PriceMoveFacts | null {
     symbol: instrument.symbol,
     name: instrument.name,
     changeBp,
-    days: MOVE_WINDOW_DAYS,
+    days,
     headlines,
     newsInWindow: recent.length,
     candleCount: candles.length,
@@ -414,7 +418,9 @@ export function priceMoveFacts(instrumentId: number): PriceMoveFacts | null {
 
 const MOVE_PROMPT = `Jesteś analitykiem tłumaczącym polskiemu inwestorowi indywidualnemu, co dzieje się z kursem spółki.
 
-Dostajesz zmianę kursu z ostatnich dwóch tygodni i nagłówki z tego samego okresu.
+Dostajesz zmianę kursu z zadanego okna czasowego i nagłówki z tego samego okresu.
+Długość okna jest podana przy danych — dopasuj do niej ton: przy jednej sesji szukasz wyzwalacza,
+przy trzydziestu dniach opisujesz wątek, a nie pojedyncze zdarzenie.
 
 Napisz po polsku 4-7 zdań, w tej kolejności:
 
@@ -443,8 +449,11 @@ Zasady:
 - Konkret zamiast asekuracji. Zdanie „to jedynie hipotezy" wnosi mniej niż wskazanie, która hipoteza jest
   najbardziej prawdopodobna i dlaczego.`;
 
-export async function explainPriceMove(instrumentId: number): Promise<AssistResult<PriceMoveFacts | null>> {
-  let facts = priceMoveFacts(instrumentId);
+export async function explainPriceMove(
+  instrumentId: number,
+  days: MoveWindow = DEFAULT_WINDOW,
+): Promise<AssistResult<PriceMoveFacts | null>> {
+  let facts = priceMoveFacts(instrumentId, days);
   if (!facts) {
     return { data: null, text: null, unavailableReason: 'Nie ma takiego instrumentu.', disclaimer: ASSIST_DISCLAIMER };
   }
@@ -458,7 +467,7 @@ export async function explainPriceMove(instrumentId: number): Promise<AssistResu
     try {
       const { fetchNewsForInstrument } = await import('./news.js');
       log.info(`Brak wiadomości dla instrumentu ${instrumentId} — pobieram: ${await fetchNewsForInstrument(instrumentId)}`);
-      facts = priceMoveFacts(instrumentId) ?? facts;
+      facts = priceMoveFacts(instrumentId, days) ?? facts;
     } catch (err) {
       log.warn(`Doraźne pobranie wiadomości nieudane: ${errorMessage(err)}`);
     }
@@ -472,7 +481,7 @@ export async function explainPriceMove(instrumentId: number): Promise<AssistResu
    * wokół której model buduje całe wyjaśnienie. Zapisana historia zostaje jako
    * zapas na wypadek niedostępności dostawcy.
    */
-  const live = await livePriceChange(instrumentId);
+  const live = await livePriceChange(instrumentId, days);
   if (live !== null) {
     facts = { ...facts, changeBp: live, priceSource: 'dostawca' };
   }
@@ -488,7 +497,7 @@ export async function explainPriceMove(instrumentId: number): Promise<AssistResu
       log.info(
         `Brak notowań instrumentu ${instrumentId} — uzupełniam: ${await backfillInstrumentHistory(instrumentId)} świec`,
       );
-      const refreshed = priceMoveFacts(instrumentId);
+      const refreshed = priceMoveFacts(instrumentId, days);
       // Uzupełnienie odświeża liczbę sesji, ale zmiany kursu od dostawcy nie nadpisuje.
       if (refreshed) facts = { ...refreshed, changeBp: facts.changeBp, priceSource: facts.priceSource };
     } catch (err) {
@@ -773,7 +782,7 @@ export async function suggestImportMapping(
  * pierwsze, które odpowie. Nie zapisujemy tych świec — to osobna ścieżka niż
  * uzupełnianie historii i ma być odporna na jej niepowodzenie.
  */
-async function livePriceChange(instrumentId: number): Promise<number | null> {
+async function livePriceChange(instrumentId: number, days: MoveWindow): Promise<number | null> {
   try {
     const instrument = db.select().from(instruments).where(eq(instruments.id, instrumentId)).get();
     if (!instrument) return null;
@@ -782,11 +791,22 @@ async function livePriceChange(instrumentId: number): Promise<number | null> {
     const { toProviderInstrument } = await import('./prices.js');
 
     const to = today(config.timezone);
-    const result = await fetchHistory(toProviderInstrument(instrument), addDays(to, -MOVE_WINDOW_DAYS), to);
+    /*
+     * Pobieramy z zapasem i przycinamy sami. Okno liczone kalendarzowo nie
+     * pokrywa się z sesjami: przy oknie jednodniowym weekend albo święto
+     * zostawiłyby jedną świecę, a dla zmiany potrzebne są dwie.
+     */
+    const result = await fetchHistory(toProviderInstrument(instrument), addDays(to, -days - 7), to);
     if (!result || result.candles.length < 2) return null;
 
-    const first = result.candles[0]!.closeE8;
-    const last = result.candles[result.candles.length - 1]!.closeE8;
+    const start = addDays(to, -days);
+    const inWindow = result.candles.filter((candle) => candle.date >= start);
+    // Zbyt mało sesji w oknie — bierzemy dwie ostatnie dostępne, czyli zmianę
+    // z ostatniej sesji. To dokładnie to, czego oczekuje okno „24h".
+    const used = inWindow.length >= 2 ? inWindow : result.candles.slice(-2);
+
+    const first = used[0]!.closeE8;
+    const last = used[used.length - 1]!.closeE8;
     if (first <= 0) return null;
 
     log.info(`Zmiana kursu ${instrument.symbol} wprost od dostawcy ${result.providerId}`);

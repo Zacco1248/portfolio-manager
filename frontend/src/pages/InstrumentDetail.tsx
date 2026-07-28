@@ -214,6 +214,7 @@ function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
     busy: boolean;
     result: Awaited<ReturnType<typeof api.assist.priceMove>> | null;
   }>({ busy: false, result: null });
+  const [days, setDays] = useState<number>(14);
 
   const history = useAsync(
     () => api.assist.history({ kind: 'price_move', instrumentId, limit: 10 }),
@@ -223,7 +224,7 @@ function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
   const run = async () => {
     setState({ busy: true, result: null });
     try {
-      const result = await api.assist.priceMove(instrumentId);
+      const result = await api.assist.priceMove(instrumentId, days);
       setState({ busy: false, result });
       history.reload();
     } catch {
@@ -237,14 +238,30 @@ function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
     <Card
       title="Dlaczego kurs się ruszył"
       action={
-        <button type="button" className="btn btn-ghost text-2xs" disabled={state.busy} onClick={() => void run()}>
-          {state.busy ? 'Sprawdzam…' : 'Sprawdź teraz'}
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-md border border-surface-border p-0.5">
+            {WINDOW_OPTIONS.map((option) => (
+              <button
+                key={option.days}
+                type="button"
+                className={`rounded px-2 py-0.5 text-2xs ${
+                  days === option.days ? 'bg-accent/15 text-accent' : 'text-content-muted hover:text-content-secondary'
+                }`}
+                onClick={() => setDays(option.days)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="btn btn-ghost text-2xs" disabled={state.busy} onClick={() => void run()}>
+            {state.busy ? 'Sprawdzam…' : 'Sprawdź teraz'}
+          </button>
+        </div>
       }
     >
       {!state.result && (
         <p className="px-4 pb-3 pt-2 text-2xs text-content-muted">
-          Zestawia zmianę kursu z ostatnich dwóch tygodni z wiadomościami z tego samego okresu.
+          Zestawia zmianę kursu z wybranego okresu z wiadomościami z tego samego czasu.
           Wymaga włączonej funkcji „Wyjaśnianie ruchów cen" w Ustawieniach. Każde sprawdzenie zostaje
           zapisane niżej wraz z datą i szacowanym kosztem.
         </p>
@@ -254,7 +271,7 @@ function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
         <>
           {facts && (
             <div className="px-4 pb-2 pt-2 text-2xs text-content-muted">
-              Zmiana przez {facts.days} dni:{' '}
+              {windowLabel(facts.days)}:{' '}
               <span className={`font-medium ${facts.changeBp === null ? '' : toneClass(facts.changeBp)}`}>
                 {facts.changeBp === null
                   ? 'brak notowań'
@@ -364,6 +381,9 @@ function SavedAnalysisRow({ entry, onDeleted }: { entry: SavedAnalysis; onDelete
           onClick={() => setOpen((current) => !current)}
         >
           <span className="tabular text-content-muted">{formatDate(entry.createdAt)}</span>
+          {typeof entry.facts?.days === 'number' && (
+            <span className="ml-2 text-content-muted">{windowLabel(entry.facts.days as number)}</span>
+          )}
           {change !== null && (
             <span className={`ml-2 tabular font-medium ${toneClass(change)}`}>
               {change > 0 ? '+' : ''}
@@ -555,4 +575,18 @@ function signalTone(kind: string): string {
 
 function nullableDiv(value: number | null | undefined): number | null {
   return value === null || value === undefined ? null : value / 1e8;
+}
+
+
+/** Dostępne okna analizy. Krótsze niż doba nie mają sensu przy notowaniach dziennych. */
+const WINDOW_OPTIONS = [
+  { days: 1, label: '24h' },
+  { days: 7, label: '7 dni' },
+  { days: 14, label: '14 dni' },
+  { days: 30, label: '30 dni' },
+];
+
+/** Opis okna. Jeden dzień to w praktyce zmiana z ostatniej sesji, nie doba zegarowa. */
+function windowLabel(days: number): string {
+  return days === 1 ? 'Zmiana z ostatniej sesji' : `Zmiana przez ${days} dni`;
 }
