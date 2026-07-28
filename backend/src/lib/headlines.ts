@@ -85,3 +85,33 @@ export function looksMarketRelated(title: string): boolean {
   if (OFF_TOPIC.some((word) => text.includes(word))) return false;
   return MARKET_TERMS.some((word) => text.includes(word));
 }
+
+
+/**
+ * Waga nagłówka dla wyjaśnienia ruchu kursu.
+ *
+ * Kanał zwraca kilkanaście tekstów o spółce, ale nie są równe: komunikat
+ * o rekomendacji albo wynikach mówi o wycenie wprost, a zbiorczy przegląd sesji
+ * wspomina spółkę mimochodem. Bez uszeregowania model budował wątek wokół tego,
+ * co akurat trafiło się pierwsze.
+ *
+ * Wyższa liczba znaczy ważniejszy tekst.
+ */
+const IMPORTANCE_RULES: { match: RegExp; weight: number }[] = [
+  // Zdarzenia raportowane obowiązkowo — najsilniej wiążą się z kursem.
+  { match: /espi|raport bieżący|komunikat giełdowy|walne zgromadzenie/i, weight: 10 },
+  { match: /rekomendacj|wycen|cena docelowa|podnieśli|obniżyli|kupuj|sprzedaj|trzymaj/i, weight: 9 },
+  { match: /wyniki (finansow|za |kwartał)|zysk netto|przychody|ebitda|prognoz|guidance/i, weight: 8 },
+  { match: /dywidend|skup akcji|buyback|split|emisj[aę] akcji|wykup/i, weight: 8 },
+  { match: /przejęci|fuzj|akwizycj|sprzedaż aktywów|kontrakt|umow[aę]/i, weight: 7 },
+  { match: /prezes|zarząd|rada nadzorcza|dymisj|rezygnacj|powołan/i, weight: 6 },
+  { match: /zarzut|prokuratur|śledztw|kara |ochrony konkurencji|regulator|sankcj/i, weight: 6 },
+  { match: /strajk|awari|pożar|wypadek|przestój/i, weight: 5 },
+  // Przeglądy sesji wspominają spółkę przy okazji.
+  { match: /przegląd|podsumowanie sesji|notowania na żywo|wig20 |zamknięcie sesji/i, weight: 2 },
+];
+
+export function headlineImportance(title: string, summary?: string | null): number {
+  const text = `${title} ${summary ?? ''}`;
+  return IMPORTANCE_RULES.find((rule) => rule.match.test(text))?.weight ?? 4;
+}

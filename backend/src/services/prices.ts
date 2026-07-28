@@ -242,3 +242,33 @@ export function isMarketHours(): boolean {
   );
   return hour >= config.prices.marketOpenHour && hour <= config.prices.marketCloseHour;
 }
+
+
+/**
+ * Historia notowań jednego instrumentu, od pierwszej jego transakcji.
+ *
+ * Wywoływane po dodaniu pozycji i doraźnie, gdy jakaś funkcja natrafi na pustą
+ * historię. Bez tego wykres i analiza techniczna czekały do ręcznego
+ * uruchomienia uzupełniania, a brak danych bywał mylony z brakiem obrotu.
+ */
+export async function backfillInstrumentHistory(instrumentId: number): Promise<number> {
+  const row = db.select().from(instruments).where(eq(instruments.id, instrumentId)).get();
+  if (!row) return 0;
+
+  const first = db
+    .select({ date: transactions.tradeDate })
+    .from(transactions)
+    .where(eq(transactions.instrumentId, instrumentId))
+    .orderBy(transactions.tradeDate)
+    .limit(1)
+    .get();
+
+  const from = first?.date ?? addDays(today(config.timezone), -365);
+
+  try {
+    return await backfillHistory(row, from);
+  } catch (err) {
+    log.warn(`Historia ${row.symbol} nieudana: ${errorMessage(err)}`);
+    return 0;
+  }
+}

@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { aiAnalyses, instruments, newsItems, pricesDaily, realizedGains, transactions } from '../db/schema.js';
 import { addDays, today } from '../lib/dates.js';
-import { stripPublisher } from '../lib/headlines.js';
+import { headlineImportance, stripPublisher } from '../lib/headlines.js';
 import { errorMessage } from '../lib/errors.js';
 import { createLogger } from '../lib/logger.js';
 import { checkFeature } from './ai-config.js';
@@ -307,9 +307,18 @@ export interface PriceMoveFacts {
   name: string;
   changeBp: number | null;
   days: number;
-  headlines: { title: string; publishedAt: string; summary: string | null; source: string; linked: boolean }[];
+  headlines: {
+    title: string;
+    publishedAt: string;
+    summary: string | null;
+    source: string;
+    linked: boolean;
+    importance: number;
+  }[];
   /** Ile wiadomości w ogóle zebrano w tym okresie — odróżnia brak newsów od braku dopasowania. */
   newsInWindow: number;
+  /** Liczba sesji w naszej bazie. Zero oznacza lukę w danych, nie brak obrotu na giełdzie. */
+  candleCount: number;
 }
 
 /**
@@ -374,14 +383,20 @@ export function priceMoveFacts(instrumentId: number): PriceMoveFacts | null {
     (item) => item.instrumentId === instrumentId || mentionsInstrument(item.title, instrument),
   );
 
-  const headlines = matches.slice(0, 15).map((item) => ({
-    title: item.title,
-    publishedAt: item.publishedAt.slice(0, 10),
-    summary: item.aiSummaryPl ?? item.rawSummary,
-    source: item.source,
-    /** Skąd wzięło się dopasowanie — przydaje się przy diagnozowaniu pustych wyników. */
-    linked: item.instrumentId === instrumentId,
-  }));
+  const headlines = matches
+    .map((item) => ({
+      title: item.title,
+      publishedAt: item.publishedAt.slice(0, 10),
+      summary: item.aiSummaryPl ?? item.rawSummary,
+      source: item.source,
+      /** Skąd wzięło się dopasowanie — przydaje się przy diagnozowaniu pustych wyników. */
+      linked: item.instrumentId === instrumentId,
+      importance: headlineImportance(item.title, item.rawSummary),
+    }))
+    // Najpierw waga, przy równej świeższe. Model czyta od góry, więc kolejność
+    // decyduje o tym, wokół czego zbuduje wyjaśnienie.
+    .sort((a, b) => b.importance - a.importance || (a.publishedAt < b.publishedAt ? 1 : -1))
+    .slice(0, 15);
 
   return {
     symbol: instrument.symbol,
@@ -390,6 +405,7 @@ export function priceMoveFacts(instrumentId: number): PriceMoveFacts | null {
     days: MOVE_WINDOW_DAYS,
     headlines,
     newsInWindow: recent.length,
+    candleCount: candles.length,
   };
 }
 
@@ -410,6 +426,11 @@ Napisz po polsku 4-7 zdań, w tej kolejności:
    a nie ogólnik „obserwować sytuację".
 
 Zasady:
+- Nagłówki dostajesz uszeregowane od najważniejszego. Buduj wyjaśnienie wokół pierwszych z listy —
+  rekomendacji, wyników, komunikatów giełdowych — a przeglądy sesji traktuj jako tło.
+- Jeśli zmiana kursu jest opisana jako NIEZNANA, znaczy to, że brakuje danych w lokalnej bazie aplikacji.
+  NIE wyciągaj z tego wniosku o zawieszeniu notowań, wstrzymaniu obrotu ani o jakimkolwiek zdarzeniu
+  na giełdzie. Napisz, że nie znasz skali ruchu, i skomentuj same wiadomości.
 - Rozróżniaj zbieżność w czasie od przyczyny i nazywaj to wprost, ale nie zatrzymuj się na tym rozróżnieniu —
   ono jest zastrzeżeniem, nie treścią odpowiedzi.
 - Jeśli nagłówków brak, nie pisz o tym pięciu zdań. Stwierdź to raz i przejdź do tego, co typowo stoi
@@ -440,10 +461,30 @@ export async function explainPriceMove(instrumentId: number): Promise<AssistResu
     }
   }
 
+  /*
+   * To samo z notowaniami. Pusta historia to luka w naszej bazie, a nie
+   * zawieszenie obrotu — ale bez uzupełnienia nie ma czego wyjaśniać, a model
+   * dostawszy „brak notowań" potrafi wysnuć z tego nieistniejące zdarzenie.
+   */
+  if (facts.candleCount < 2) {
+    try {
+      const { backfillInstrumentHistory } = await import('./prices.js');
+      log.info(
+        `Brak notowań instrumentu ${instrumentId} — uzupełniam: ${await backfillInstrumentHistory(instrumentId)} świec`,
+      );
+      facts = priceMoveFacts(instrumentId) ?? facts;
+    } catch (err) {
+      log.warn(`Doraźne uzupełnienie notowań nieudane: ${errorMessage(err)}`);
+    }
+  }
+
   const payload = [
     `Instrument: ${facts.symbol} (${facts.name})`,
-    `Zmiana kursu przez ${facts.days} dni: ${facts.changeBp === null ? 'brak notowań' : pct(facts.changeBp)}`,
-    'Nagłówki:',
+    facts.changeBp === null
+      ? `Zmiana kursu przez ${facts.days} dni: NIEZNANA — w lokalnej bazie aplikacji brakuje notowań ` +
+        `(mamy ${facts.candleCount} sesji). To luka w danych, a NIE przerwa w obrocie na giełdzie.`
+      : `Zmiana kursu przez ${facts.days} dni: ${pct(facts.changeBp)}`,
+    'Nagłówki, od najważniejszego:',
     ...(facts.headlines.length > 0
       ? facts.headlines.map((h) => `- ${h.publishedAt}: ${h.title}${h.summary ? ` — ${h.summary.slice(0, 200)}` : ''}`)
       : ['- brak wiadomości dotyczących tej spółki w tym okresie']),

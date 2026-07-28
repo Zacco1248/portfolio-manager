@@ -11,6 +11,7 @@ import { db } from '../db/index.js';
 import { instruments, portfolios, transactions } from '../db/schema.js';
 import type { TransactionRow } from '../db/schema.js';
 import { asyncHandler } from '../lib/http.js';
+import { backfillInstrumentHistory } from '../services/prices.js';
 import { toInstrumentDto } from '../services/positions.js';
 import {
   createTransaction,
@@ -86,6 +87,16 @@ transactionsRouter.post(
   asyncHandler(async (req, res) => {
     const parsed = transactionCreateSchema.parse(req.body);
     const { transaction, warnings } = await createTransaction(parsed);
+
+    /*
+     * Nowa pozycja potrzebuje historii notowań — bez niej wykres wartości
+     * portfela ma dziurę, a analiza techniczna nie ma czego liczyć. Leci w tle,
+     * bo pobranie kilkuset sesji trwa dłużej niż zapis transakcji.
+     */
+    if (transaction.instrumentId !== null) {
+      void backfillInstrumentHistory(transaction.instrumentId);
+    }
+
     res.status(201).json({ transaction: hydrate([transaction])[0], warnings });
   }),
 );

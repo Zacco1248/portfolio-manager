@@ -9,7 +9,7 @@ import { asyncHandler } from '../lib/http.js';
 import { classifyInstrument, localClassification } from '../services/classify.js';
 import { normalizeSymbol, registerAlias, suggestSymbols } from '../services/instruments.js';
 import { toInstrumentDto } from '../services/positions.js';
-import { backfillHistory } from '../services/prices.js';
+import { backfillHistory, backfillInstrumentHistory } from '../services/prices.js';
 
 export const instrumentsRouter = Router();
 
@@ -74,6 +74,10 @@ instrumentsRouter.post(
      * świeżo dodana pozycja od razu psuła wykresy struktury.
      */
     const enriched = await enrichNewInstrument(row);
+
+    // Historia notowań w tle — odpowiadamy od razu, bo pobranie kilkuset sesji
+    // trwa dłużej niż użytkownik powinien czekać na potwierdzenie zapisu.
+    void backfillInstrumentHistory(row.id);
 
     res.status(201).json(toInstrumentDto(enriched));
   }),
