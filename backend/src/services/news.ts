@@ -137,7 +137,17 @@ export function watchedInstruments(): InstrumentRow[] {
 }
 
 export async function fetchNews(): Promise<string> {
-  const targets = watchedInstruments();
+  return fetchNewsFor(watchedInstruments());
+}
+
+/**
+ * Pobranie wiadomości dla wskazanych instrumentów.
+ *
+ * Wydzielone z `fetchNews`, żeby dało się odświeżyć jedną spółkę na żądanie —
+ * czekanie do najbliższego przebiegu co godzinę jest bez sensu, gdy użytkownik
+ * właśnie patrzy na pustą listę.
+ */
+export async function fetchNewsFor(targets: InstrumentRow[]): Promise<string> {
   if (targets.length === 0) return 'brak obserwowanych instrumentów';
 
   let inserted = 0;
@@ -279,6 +289,12 @@ export function listNews(query: NewsQuery): NewsItem[] {
     // Bez włączonej analizy AI pokazujemy zajawkę prosto ze źródła — dla
     // polskich serwisów jest po polsku, więc spełnia tę samą rolę.
     aiSummaryPl: row.aiSummaryPl ?? shortSummary(row.rawSummary),
+    /*
+     * Streszczenie pochodzi albo od modelu, albo z przyciętej zajawki kanału.
+     * Bez tego rozróżnienia interfejs podpisywałby cudzy tekst jako wytworzony
+     * przez AI — albo odwrotnie, ukrywał że coś przeszło przez model.
+     */
+    aiGenerated: row.aiSummaryPl !== null,
     sentiment: row.sentiment as Sentiment | null,
     importance: row.importance as Importance | null,
     aiSignal: row.aiSignal,
@@ -319,4 +335,12 @@ function shortSummary(raw: string | null): string | null {
   const cut = text.slice(0, 240);
   const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('? '), cut.lastIndexOf('! '));
   return lastStop > 120 ? cut.slice(0, lastStop + 1) : `${cut.trimEnd()}…`;
+}
+
+
+/** Wiadomości dla jednego instrumentu, na żądanie z interfejsu. */
+export async function fetchNewsForInstrument(instrumentId: number): Promise<string> {
+  const instrument = db.select().from(instruments).where(eq(instruments.id, instrumentId)).get();
+  if (!instrument) return 'nie ma takiego instrumentu';
+  return fetchNewsFor([instrument]);
 }

@@ -173,6 +173,28 @@ function cryptoCarry(year: number, taxableIds: number[]): LossCarryForward | nul
 }
 
 /**
+ * Ubruttowienie dywidendy wypłaconej po potrąceniu podatku.
+ *
+ * Polski płatnik przekazuje kwotę już pomniejszoną o 19% i nie raportuje
+ * osobnego wiersza podatku, więc brutto z wyciągu równa się netto. Bez tej
+ * korekty zestawienia pokazują zerowy podatek i zaniżoną kwotę brutto.
+ *
+ * Zwraca kwoty w tej samej jednostce, w jakiej je dostało.
+ */
+export function grossUpWithheld(
+  grossMinor: number,
+  taxMinor: number,
+  instrument: { symbol: string; country: string | null } | undefined,
+): { grossMinor: number; taxMinor: number } {
+  if (taxMinor !== 0 || grossMinor <= 0 || !isDomestic(instrument)) {
+    return { grossMinor, taxMinor };
+  }
+
+  const grossedUp = Math.round((grossMinor * 10_000) / (10_000 - CAPITAL_GAINS_TAX_BP));
+  return { grossMinor: grossedUp, taxMinor: grossedUp - grossMinor };
+}
+
+/**
  * Czy instrument jest notowany w Polsce.
  *
  * Rozstrzyga o sposobie poboru podatku od dywidendy: krajowy płatnik potrąca
@@ -235,11 +257,9 @@ function buildDividends(
        * 19% — broker raportuje kwotę netto i nie pokazuje osobnego wiersza podatku.
        * Bez ubruttowienia policzylibyśmy podatek drugi raz, od kwoty już opodatkowanej.
        */
-      if (whtPln === 0 && isDomestic(instrument)) {
-        const grossedUp = Math.round((grossPln * 10_000) / (10_000 - CAPITAL_GAINS_TAX_BP));
-        whtPln = grossedUp - grossPln;
-        grossPln = grossedUp;
-      }
+      const adjusted = grossUpWithheld(grossPln, whtPln, instrument);
+      grossPln = adjusted.grossMinor;
+      whtPln = adjusted.taxMinor;
 
       gross += grossPln;
       withholding += whtPln;

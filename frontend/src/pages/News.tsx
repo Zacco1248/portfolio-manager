@@ -173,7 +173,16 @@ export function News() {
                         </a>
                       </h3>
 
-                      {item.aiSummaryPl && <p className="mt-1.5 text-sm text-content-secondary">{item.aiSummaryPl}</p>}
+                      {item.aiSummaryPl && (
+                        <div className="mt-1.5">
+                          <p className="text-sm text-content-secondary">{item.aiSummaryPl}</p>
+                          {item.aiGenerated && (
+                            <span className="mt-1 inline-block text-2xs text-content-muted">
+                              Streszczone i przetłumaczone przez AI
+                            </span>
+                          )}
+                        </div>
+                      )}
 
                       {item.aiSignal && (item.aiSignal.hold.length > 0 || item.aiSignal.reduce.length > 0) && (
                         <div className="mt-3 grid gap-3 sm:grid-cols-2">

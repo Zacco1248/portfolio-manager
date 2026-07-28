@@ -306,6 +306,8 @@ export interface NewsItem {
   title: string;
   publishedAt: string;
   aiSummaryPl: string | null;
+  /** Czy streszczenie wytworzył model, czy jest to zajawka z kanału. */
+  aiGenerated?: boolean;
   sentiment: Sentiment | null;
   importance: Importance | null;
   aiSignal: { hold: string[]; reduce: string[]; rationale: string } | null;

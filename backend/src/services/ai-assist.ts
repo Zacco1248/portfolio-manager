@@ -419,9 +419,24 @@ Zasady:
   najbardziej prawdopodobna i dlaczego.`;
 
 export async function explainPriceMove(instrumentId: number): Promise<AssistResult<PriceMoveFacts | null>> {
-  const facts = priceMoveFacts(instrumentId);
+  let facts = priceMoveFacts(instrumentId);
   if (!facts) {
     return { data: null, text: null, unavailableReason: 'Nie ma takiego instrumentu.', disclaimer: ASSIST_DISCLAIMER };
+  }
+
+  /*
+   * Bez wiadomości nie ma czego analizować, a czekanie do najbliższego przebiegu
+   * co godzinę oznaczałoby pustą odpowiedź teraz. Dociągamy je w locie i liczymy
+   * fakty jeszcze raz — wywołanie modelu i tak potrwa dłużej niż to pobranie.
+   */
+  if (facts.headlines.length === 0) {
+    try {
+      const { fetchNewsForInstrument } = await import('./news.js');
+      log.info(`Brak wiadomości dla instrumentu ${instrumentId} — pobieram: ${await fetchNewsForInstrument(instrumentId)}`);
+      facts = priceMoveFacts(instrumentId) ?? facts;
+    } catch (err) {
+      log.warn(`Doraźne pobranie wiadomości nieudane: ${errorMessage(err)}`);
+    }
   }
 
   const payload = [

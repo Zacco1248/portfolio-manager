@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { localClassification } from '../src/services/classify.js';
 import { dailyReturns } from '../src/services/stats.js';
+import { toYahooSymbol } from '../src/providers/yahoo.js';
 
 describe('klasyfikacja lokalna', () => {
   it('rozpoznaje kraj po prefiksie rynku w symbolu', () => {
@@ -79,5 +80,31 @@ describe('przebieg obsunięcia', () => {
     expect(series[1]).toBeLessThan(0); // spadek poniżej szczytu
     expect(series[2]).toBeLessThan(series[1]!); // pogłębienie
     expect(series[3]).toBe(0); // wybicie na nowy szczyt
+  });
+});
+
+describe('symbol dla dostawcy notowań', () => {
+  const base = { id: 1, assetClass: 'stock' as const, provider: null, providerSymbol: null, unit: null };
+
+  it('goły ticker w złotych dostaje sufiks GPW', () => {
+    expect(toYahooSymbol({ ...base, symbol: 'XTB', currency: 'PLN', exchange: null })).toBe('XTB.WA');
+  });
+
+  it('pole exchange wystarczy, gdy waluta jest inna', () => {
+    expect(toYahooSymbol({ ...base, symbol: 'PKN', currency: 'EUR', exchange: 'WSE' })).toBe('PKN.WA');
+  });
+
+  it('ticker w dolarach zostaje bez sufiksu', () => {
+    expect(toYahooSymbol({ ...base, symbol: 'AAPL', currency: 'USD', exchange: null })).toBe('AAPL');
+  });
+
+  it('krypto w złotych nie trafia na GPW', () => {
+    expect(
+      toYahooSymbol({ ...base, assetClass: 'crypto', symbol: 'BTC', currency: 'PLN', exchange: null }),
+    ).not.toBe('BTC.WA');
+  });
+
+  it('jawny prefiks rynku ma pierwszeństwo', () => {
+    expect(toYahooSymbol({ ...base, symbol: 'LON:IUIT', currency: 'PLN', exchange: null })).toBe('IUIT.L');
   });
 });

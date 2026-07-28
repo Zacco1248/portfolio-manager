@@ -3,8 +3,10 @@ import { asc, eq } from 'drizzle-orm';
 import { idParam, instrumentCreateSchema, instrumentSearchSchema, instrumentUpdateSchema } from '@portfolio/shared';
 import { db } from '../db/index.js';
 import { instrumentAliases, instruments, transactions } from '../db/schema.js';
+import type { InstrumentRow } from '../db/schema.js';
 import { conflict, notFound } from '../lib/errors.js';
 import { asyncHandler } from '../lib/http.js';
+import { classifyInstrument, localClassification } from '../services/classify.js';
 import { normalizeSymbol, registerAlias, suggestSymbols } from '../services/instruments.js';
 import { toInstrumentDto } from '../services/positions.js';
 import { backfillHistory } from '../services/prices.js';
@@ -66,7 +68,14 @@ instrumentsRouter.post(
     registerAlias(row.id, 'match', normalized.matchKey);
     registerAlias(row.id, 'manual', parsed.symbol);
 
-    res.status(201).json(toInstrumentDto(row));
+    /*
+     * Sektor i kraj uzupełniamy od razu, o ile użytkownik ich nie podał.
+     * Zostawienie tego do ręcznego uruchomienia klasyfikacji oznaczało, że
+     * świeżo dodana pozycja od razu psuła wykresy struktury.
+     */
+    const enriched = await enrichNewInstrument(row);
+
+    res.status(201).json(toInstrumentDto(enriched));
   }),
 );
 
@@ -132,3 +141,32 @@ instrumentsRouter.post(
     res.json({ ok: true, candles: count });
   }),
 );
+
+
+/**
+ * Uzupełnienie metadanych nowo utworzonego instrumentu.
+ *
+ * Najpierw to, co wynika z samych danych (klasa aktywów, rynek), potem pytanie
+ * do dostawcy o sektor. Błąd sieci nie może wywrócić tworzenia pozycji, więc
+ * przy niepowodzeniu zwracamy wiersz bez wzbogacenia.
+ */
+async function enrichNewInstrument(row: InstrumentRow): Promise<InstrumentRow> {
+  const patch: Partial<InstrumentRow> = {};
+
+  const local = localClassification(row);
+  if (!row.sector && local.sector) patch.sector = local.sector;
+  if (!row.country && local.country) patch.country = local.country;
+
+  if (!patch.sector && !row.sector && row.assetClass !== 'bond' && row.assetClass !== 'cash') {
+    try {
+      const classification = await classifyInstrument(row);
+      if (classification.sector) patch.sector = classification.sector;
+    } catch {
+      // Dostawca niedostępny — sektor uzupełni się przy ręcznej klasyfikacji.
+    }
+  }
+
+  if (Object.keys(patch).length === 0) return row;
+
+  return db.update(instruments).set(patch).where(eq(instruments.id, row.id)).returning().get();
+}

@@ -90,7 +90,16 @@ export function toYahooSymbol(instrument: ProviderInstrument): string | null {
   }
 
   if (market === null) {
-    // Bez prefiksu zakładamy rynek amerykański — tam tickery są bez sufiksu.
+    /*
+     * Bez prefiksu rynku zgadujemy z pozostałych danych. Wyciąg brokera nie
+     * zawsze podaje giełdę, a goły ticker „XTB" u Yahoo trafia w zupełnie inny
+     * papier — sektor i notowania przypisywały się wtedy obcej spółce.
+     * Waluta rozstrzyga to jednoznacznie dla papierów z GPW.
+     */
+    if (instrument.exchange === 'WSE' || instrument.exchange === 'GPW') return `${ticker}.WA`;
+    if (instrument.currency === 'PLN' && instrument.assetClass !== 'crypto') return `${ticker}.WA`;
+
+    // Poza tym rynek amerykański — tam tickery są bez sufiksu.
     return ticker;
   }
 

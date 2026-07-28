@@ -17,6 +17,7 @@ import {
 } from '../services/analytics.js';
 import { buildDashboard } from '../services/dashboard.js';
 import { buildStats } from '../services/stats.js';
+import { grossUpWithheld } from '../services/tax.js';
 import { upcomingDividends } from '../services/corporate-actions.js';
 import { activePortfolioIds, buildPositions, toInstrumentDto } from '../services/positions.js';
 import { computeIndicators, currentState, detectSignals } from '../services/technical.js';
@@ -142,16 +143,23 @@ analyticsRouter.get('/dividends', (req, res, next) => {
 
   const entries: DividendEntry[] = rows
     .filter((r) => r.instrumentId !== null && instrumentMap.has(r.instrumentId))
-    .map((r) => ({
-      transactionId: r.id,
-      instrument: toInstrumentDto(instrumentMap.get(r.instrumentId!)!),
-      portfolioName: portfolioMap.get(r.portfolioId) ?? '',
-      date: r.tradeDate,
-      grossMinor: r.grossMinor,
-      taxMinor: r.taxMinor,
-      netPlnMinor: r.amountPlnMinor,
-      currency: r.currency,
-    }));
+    .map((r) => {
+      const instrument = instrumentMap.get(r.instrumentId!)!;
+      // Dywidenda krajowa przychodzi już po potrąceniu 19% i bez osobnego
+      // wiersza podatku — bez ubruttowienia brutto równałoby się netto.
+      const { grossMinor, taxMinor } = grossUpWithheld(r.grossMinor, r.taxMinor, instrument);
+
+      return {
+        transactionId: r.id,
+        instrument: toInstrumentDto(instrument),
+        portfolioName: portfolioMap.get(r.portfolioId) ?? '',
+        date: r.tradeDate,
+        grossMinor,
+        taxMinor,
+        netPlnMinor: r.amountPlnMinor,
+        currency: r.currency,
+      };
+    });
 
   const byYearMap = new Map<number, { grossPlnMinor: number; taxPlnMinor: number; netPlnMinor: number }>();
   for (const row of rows) {
@@ -159,8 +167,13 @@ analyticsRouter.get('/dividends', (req, res, next) => {
     const bucket = byYearMap.get(year) ?? { grossPlnMinor: 0, taxPlnMinor: 0, netPlnMinor: 0 };
     // Kwoty brutto i podatek są w walucie transakcji — przeliczamy kursem
     // zapisanym przy transakcji, żeby zestawienie roczne było w PLN.
-    bucket.grossPlnMinor += Math.round((row.grossMinor * row.fxRateE6) / 1_000_000);
-    bucket.taxPlnMinor += Math.round((row.taxMinor * row.fxRateE6) / 1_000_000);
+    const adjusted = grossUpWithheld(
+      row.grossMinor,
+      row.taxMinor,
+      row.instrumentId ? instrumentMap.get(row.instrumentId) : undefined,
+    );
+    bucket.grossPlnMinor += Math.round((adjusted.grossMinor * row.fxRateE6) / 1_000_000);
+    bucket.taxPlnMinor += Math.round((adjusted.taxMinor * row.fxRateE6) / 1_000_000);
     bucket.netPlnMinor += row.amountPlnMinor;
     byYearMap.set(year, bucket);
   }
