@@ -291,6 +291,15 @@ export const api = {
         suggestedModels: Record<string, { id: string; label: string; hint: string }[]>;
       }>('/ai'),
     update: (body: Record<string, unknown>) => patch<unknown>('/ai', body),
+    test: () =>
+      post<{
+        ok: boolean;
+        provider: string;
+        model: string;
+        latencyMs: number | null;
+        message: string;
+        reply: string | null;
+      }>('/ai/test', {}),
   },
 
   duplicates: {

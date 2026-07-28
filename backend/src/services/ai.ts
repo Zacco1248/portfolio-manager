@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { errorMessage } from '../lib/errors.js';
 import { fetchJson } from '../lib/http-client.js';
 import { createLogger } from '../lib/logger.js';
+import type { AiProvider } from './ai-config.js';
 import { apiKeyFor, checkFeature, getAiSettings } from './ai-config.js';
 
 const log = createLogger('ai');
@@ -271,4 +272,108 @@ export async function generateNarrative(input: NarrativeInput): Promise<string |
     log.warn(`Komentarz AI nieudany: ${errorMessage(err)}`);
     return null;
   }
+}
+
+
+export interface AiConnectionTest {
+  ok: boolean;
+  provider: AiProvider;
+  model: string;
+  /** Czas odpowiedzi w milisekundach — pomaga odróżnić awarię od powolnego modelu. */
+  latencyMs: number | null;
+  message: string;
+  /** Odpowiedź modelu, przycięta. Dowód, że połączenie faktycznie zadziałało. */
+  reply: string | null;
+}
+
+/**
+ * Sprawdzenie połączenia z dostawcą modelu.
+ *
+ * Świadomie omija przełączniki poszczególnych funkcji: to jawne działanie
+ * użytkownika w ustawieniach, a nie automatyczne wywołanie w tle. Wysyłamy
+ * wyłącznie stałe zdanie testowe — nic z portfela.
+ */
+export async function testAiConnection(): Promise<AiConnectionTest> {
+  const settings = getAiSettings();
+  const base = { provider: settings.provider, model: settings.model };
+
+  if (!apiKeyFor(settings.provider)) {
+    const variable = settings.provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY';
+    return {
+      ...base,
+      ok: false,
+      latencyMs: null,
+      reply: null,
+      message: `Brak ${variable} w pliku .env. Po dopisaniu klucza zrestartuj kontener — .env czytany jest przy starcie.`,
+    };
+  }
+
+  const started = Date.now();
+
+  try {
+    const reply = await complete(
+      'Odpowiadasz jednym słowem, bez interpunkcji i bez wyjaśnień.',
+      'Napisz: dziala',
+      32,
+    );
+    const latencyMs = Date.now() - started;
+
+    if (!reply || reply.trim().length === 0) {
+      return {
+        ...base,
+        ok: false,
+        latencyMs,
+        reply: null,
+        message: 'Dostawca odpowiedział, ale bez treści. Sprawdź, czy wybrany model istnieje i jest dostępny dla Twojego klucza.',
+      };
+    }
+
+    return {
+      ...base,
+      ok: true,
+      latencyMs,
+      reply: reply.trim().slice(0, 120),
+      message: `Połączenie działa. Model odpowiedział w ${(latencyMs / 1000).toFixed(1)} s.`,
+    };
+  } catch (err) {
+    return {
+      ...base,
+      ok: false,
+      latencyMs: Date.now() - started,
+      reply: null,
+      message: explainAiError(errorMessage(err), settings.provider),
+    };
+  }
+}
+
+/**
+ * Tłumaczenie błędu dostawcy na wskazówkę.
+ *
+ * Surowy komunikat typu „401 Unauthorized" nie mówi użytkownikowi, co zrobić,
+ * a przyczyny są policzalne i za każdym razem te same.
+ */
+export function explainAiError(raw: string, provider: AiProvider): string {
+  const text = raw.toLowerCase();
+  const variable = provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY';
+
+  if (text.includes('401') || text.includes('unauthorized') || text.includes('invalid_api_key') || text.includes('authentication')) {
+    return `Klucz odrzucony przez dostawcę. Sprawdź ${variable} w .env — czy nie ma spacji, cudzysłowów ani ucięcia na końcu.`;
+  }
+  if (text.includes('404') || text.includes('model_not_found') || text.includes('does not exist')) {
+    return 'Dostawca nie zna tego modelu. Wybierz inny z listy albo popraw wpisany identyfikator.';
+  }
+  if (text.includes('429') || text.includes('rate limit') || text.includes('quota')) {
+    return 'Przekroczony limit zapytań albo wyczerpane środki na koncie u dostawcy. Sprawdź limity i saldo.';
+  }
+  if (text.includes('credit') || text.includes('billing') || text.includes('payment')) {
+    return 'Konto u dostawcy nie ma środków albo brakuje danych rozliczeniowych.';
+  }
+  if (text.includes('timeout') || text.includes('etimedout') || text.includes('abort')) {
+    return 'Przekroczono czas oczekiwania. Serwer może nie mieć wyjścia do internetu albo dostawca chwilowo nie odpowiada.';
+  }
+  if (text.includes('enotfound') || text.includes('econnrefused') || text.includes('getaddrinfo')) {
+    return 'Nie udało się nawiązać połączenia. Sprawdź, czy serwer ma dostęp do internetu i czy DNS działa.';
+  }
+
+  return `Nieoczekiwany błąd dostawcy: ${raw}`;
 }

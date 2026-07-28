@@ -455,6 +455,28 @@ function EtfHoldingsEditor({ onMessage }: { onMessage: (message: string, tone: '
 function AiSettingsCard({ onMessage }: { onMessage: (message: string, tone: 'info' | 'error' | 'success') => void }) {
   const ai = useAsync(() => api.ai.status(), []);
   const [model, setModel] = useState<string | null>(null);
+  const [test, setTest] = useState<{ busy: boolean; result: Awaited<ReturnType<typeof api.ai.test>> | null }>({
+    busy: false,
+    result: null,
+  });
+
+  /**
+   * Test wysyła do dostawcy jedno stałe zdanie i pokazuje odpowiedź.
+   *
+   * Bez tego jedyną informacją zwrotną o źle wpisanym kluczu albo nieistniejącym
+   * modelu byłby brak streszczeń w newsach — objaw odległy w czasie od przyczyny
+   * i nie do odróżnienia od braku wiadomości.
+   */
+  const runTest = () => {
+    setTest({ busy: true, result: null });
+    void api.ai
+      .test()
+      .then((result) => setTest({ busy: false, result }))
+      .catch(() => {
+        setTest({ busy: false, result: null });
+        onMessage('Nie udało się wykonać testu', 'error');
+      });
+  };
 
   if (!ai.data) return null;
 
@@ -476,11 +498,32 @@ function AiSettingsCard({ onMessage }: { onMessage: (message: string, tone: 'inf
     <Card
       title="Funkcje AI"
       action={
-        <span className="text-2xs text-content-muted">
-          Klucze: Anthropic {status.keys.anthropic ? '✓' : '—'}, OpenAI {status.keys.openai ? '✓' : '—'}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-2xs text-content-muted">
+            Klucze: Anthropic {status.keys.anthropic ? '✓' : '—'}, OpenAI {status.keys.openai ? '✓' : '—'}
+          </span>
+          <button type="button" className="btn btn-ghost text-2xs" disabled={test.busy} onClick={runTest}>
+            {test.busy ? 'Testuję…' : 'Testuj połączenie'}
+          </button>
+        </div>
       }
     >
+      {test.result && (
+        <div
+          className={`mx-4 mt-3 rounded-lg border px-3 py-2 text-2xs ${
+            test.result.ok ? 'border-gain/40 bg-gain/10 text-gain' : 'border-warn/40 bg-warn/10 text-warn'
+          }`}
+        >
+          <div className="font-medium">
+            {test.result.ok ? '✓ ' : '✗ '}
+            {test.result.message}
+          </div>
+          <div className="mt-0.5 text-content-muted">
+            {test.result.provider} · {test.result.model}
+            {test.result.reply ? ` · odpowiedź: „${test.result.reply}"` : ''}
+          </div>
+        </div>
+      )}
       <div className="grid gap-3 p-4 pt-2 sm:grid-cols-2">
         <Field label="Dostawca">
           <select className="input" value={status.provider} onChange={(e) => save({ provider: e.target.value })}>

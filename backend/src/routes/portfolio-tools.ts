@@ -25,7 +25,7 @@ import { duplicateSummary } from '../services/duplicates.js';
 import { buildSuggestions } from '../services/suggestions.js';
 import { deleteTransaction } from '../services/transactions.js';
 import { buildInsights, buildProjection, emergencyFundStatus } from '../services/insights.js';
-import { generateNarrative } from '../services/ai.js';
+import { generateNarrative, testAiConnection } from '../services/ai.js';
 import {
   addReportDate,
   deleteReportDate,
@@ -440,6 +440,13 @@ toolsRouter.get(
 toolsRouter.get('/ai', (_req, res) => {
   res.json(aiStatus());
 });
+
+toolsRouter.post(
+  '/ai/test',
+  asyncHandler(async (_req, res) => {
+    res.json(await testAiConnection());
+  }),
+);
 
 toolsRouter.patch('/ai', (req, res, next) => {
   const parsed = z

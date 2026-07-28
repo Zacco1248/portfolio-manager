@@ -168,6 +168,52 @@ export function Help() {
         </div>
       </Card>
 
+      <Card title="Powiadomienia na Telegramie">
+        <div className="space-y-3 p-4 pt-2 text-sm">
+          <p className="text-content-secondary">
+            Opcjonalne. Bez konfiguracji alerty widać wyłącznie w aplikacji — nic nie przestaje działać,
+            po prostu trzeba do niej zajrzeć. Z Telegramem alert przychodzi na telefon w chwili wykrycia.
+          </p>
+
+          <Item title="1. Załóż bota">
+            W Telegramie napisz do <code>@BotFather</code>, wyślij <code>/newbot</code> i podaj nazwę
+            oraz login bota (musi kończyć się na „bot", np. <code>moj_portfel_bot</code>).
+            W odpowiedzi dostaniesz token w postaci <code>123456789:AAE...</code> — to jest
+            <code> TELEGRAM_BOT_TOKEN</code>.
+          </Item>
+
+          <Item title="2. Odblokuj bota">
+            Wejdź w profil swojego świeżo utworzonego bota i naciśnij <strong>Start</strong>. Bez tego
+            Telegram nie pozwoli mu napisać do Ciebie pierwszy — dostaniesz błąd „chat not found",
+            nawet przy poprawnym tokenie.
+          </Item>
+
+          <Item title="3. Ustal swój chat_id">
+            Napisz do <code>@userinfobot</code> — odpowie Twoim numerem identyfikacyjnym, np.
+            <code> 123456789</code>. To jest <code>TELEGRAM_CHAT_ID</code>. Jeśli wolisz dostawać
+            powiadomienia na grupę, dodaj do niej bota i użyj identyfikatora grupy — będzie ujemny,
+            np. <code>-1001234567890</code>.
+          </Item>
+
+          <Item title="4. Wpisz do .env i zrestartuj">
+            Na serwerze otwórz <code>.env</code>, uzupełnij <code>TELEGRAM_BOT_TOKEN</code> oraz{' '}
+            <code>TELEGRAM_CHAT_ID</code>, zapisz i wykonaj <code>docker compose up -d</code>.
+            Plik czytany jest przy starcie, więc bez restartu zmiana nie zadziała.
+          </Item>
+
+          <Item title="5. Sprawdź">
+            W Alertach użyj przycisku sprawdzania alertów. Jeśli któryś się wyzwoli, wiadomość
+            powinna przyjść na Telegram. Cisza mimo wyzwolonego alertu oznacza zwykle pominięty
+            krok 2 albo literówkę w identyfikatorze.
+          </Item>
+
+          <p className="text-2xs text-content-muted">
+            To jedyna integracja, w której na zewnątrz trafiają konkretne kwoty — treść alertu przechodzi
+            przez serwery Telegrama. Token trzymaj tylko w <code>.env</code>; kto go ma, może pisać jako Twój bot.
+          </p>
+        </div>
+      </Card>
+
       <Card title="Co potrafi asystent">
         <div className="space-y-3 p-4 pt-2 text-sm">
           <p className="text-content-secondary">
