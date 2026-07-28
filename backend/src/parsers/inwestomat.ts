@@ -1,4 +1,5 @@
-import ExcelJS from 'exceljs';
+import { cellText, readXlsx } from '../lib/xlsx.js';
+import type { CellValue, XlsxSheet } from '../lib/xlsx.js';
 import type { AssetClass, TransactionType } from '@portfolio/shared';
 import { toMinor } from '@portfolio/shared';
 import { normalizeDate } from '../lib/dates.js';
@@ -75,22 +76,6 @@ function fold(value: string): string {
     .trim();
 }
 
-function cellText(value: ExcelJS.CellValue): string {
-  if (value === null || value === undefined) return '';
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'object') {
-    // Komórki z formułami mają postać { formula, result }, a bogaty tekst
-    // rozbity jest na fragmenty.
-    if ('result' in value && value.result !== undefined) return cellText(value.result as ExcelJS.CellValue);
-    if ('text' in value && typeof value.text === 'string') return value.text;
-    if ('richText' in value && Array.isArray(value.richText)) {
-      return value.richText.map((r) => r.text).join('');
-    }
-    return '';
-  }
-  return String(value);
-}
-
 function mapType(raw: string): TransactionType | null {
   const folded = fold(raw);
   // "Dywidenda / Odsetki" to jedna pozycja w arkuszu — traktujemy jako dywidendę,
@@ -109,28 +94,32 @@ function mapAssetClass(raw: string): AssetClass {
   return 'stock';
 }
 
-function findSheet(workbook: ExcelJS.Workbook, names: string[]): ExcelJS.Worksheet | null {
-  for (const sheet of workbook.worksheets) {
+function findSheet(sheets: XlsxSheet[], names: string[]): XlsxSheet | null {
+  for (const sheet of sheets) {
     if (names.some((n) => fold(sheet.name) === n || fold(sheet.name).startsWith(n))) return sheet;
   }
   return null;
 }
 
+/** Wartość komórki z wiersza, tolerująca wiersze krótsze niż nagłówek. */
+function cellAt(row: CellValue[] | undefined, index: number | undefined): CellValue {
+  if (!row || index === undefined || index < 0) return null;
+  return row[index] ?? null;
+}
+
 interface HeaderInfo {
-  rowNumber: number;
+  /** Indeks wiersza nagłówka, liczony od zera. */
+  rowIndex: number;
+  /** Pole wewnętrzne → indeks kolumny, liczony od zera. */
   columns: Map<string, number>;
   rawHeaders: string[];
 }
 
-function locateHeader(sheet: ExcelJS.Worksheet, mapping?: ColumnMapping): HeaderInfo | null {
-  const maxScan = Math.min(sheet.rowCount, 20);
+function locateHeader(sheet: XlsxSheet, mapping?: ColumnMapping): HeaderInfo | null {
+  const maxScan = Math.min(sheet.rows.length, 20);
 
-  for (let r = 1; r <= maxScan; r += 1) {
-    const row = sheet.getRow(r);
-    const rawHeaders: string[] = [];
-    row.eachCell({ includeEmpty: true }, (cell, col) => {
-      rawHeaders[col - 1] = cellText(cell.value).trim();
-    });
+  for (let r = 0; r < maxScan; r += 1) {
+    const rawHeaders = (sheet.rows[r] ?? []).map((cell) => cellText(cell).trim());
 
     const columns = new Map<string, number>();
     for (const [field, aliases] of Object.entries(COLUMN_ALIASES)) {
@@ -139,45 +128,45 @@ function locateHeader(sheet: ExcelJS.Worksheet, mapping?: ColumnMapping): Header
       const index = rawHeaders.findIndex((h) =>
         override ? fold(h) === fold(override) : aliases.includes(fold(h)),
       );
-      if (index !== -1) columns.set(field, index + 1);
+      if (index !== -1) columns.set(field, index);
     }
 
     // Nagłówek uznajemy za znaleziony, gdy mamy komplet pól bez których
     // wiersza nie da się zinterpretować.
     if (columns.has('date') && columns.has('type') && columns.has('symbol')) {
-      return { rowNumber: r, columns, rawHeaders: rawHeaders.filter(Boolean) };
+      return { rowIndex: r, columns, rawHeaders: rawHeaders.filter(Boolean) };
     }
   }
 
   return null;
 }
 
-function readSnapshots(sheet: ExcelJS.Worksheet): ParsedSnapshot[] {
-  const header = sheet.getRow(1);
-  const labels: string[] = [];
-  header.eachCell({ includeEmpty: true }, (cell, col) => {
-    labels[col - 1] = fold(cellText(cell.value));
-  });
-
+function readSnapshots(sheet: XlsxSheet): ParsedSnapshot[] {
+  const labels = (sheet.rows[0] ?? []).map((cell) => fold(cellText(cell)));
   const dateCol = labels.findIndex((l) => l === 'data');
   if (dateCol === -1) return [];
 
   const snapshots: ParsedSnapshot[] = [];
-  for (let r = 2; r <= sheet.rowCount; r += 1) {
-    const row = sheet.getRow(r);
-    const date = normalizeDate(cellText(row.getCell(dateCol + 1).value));
+
+  for (let r = 1; r < sheet.rows.length; r += 1) {
+    const row = sheet.rows[r] ?? [];
+    const date = normalizeDate(cellAt(row, dateCol));
     if (!date) continue;
 
     let total = 0;
     const byAssetClass: Record<string, number> = {};
-    row.eachCell({ includeEmpty: false }, (cell, col) => {
-      if (col === dateCol + 1) return;
-      const label = labels[col - 1];
+
+    row.forEach((cell, col) => {
+      if (col === dateCol) return;
+      const label = labels[col];
       if (!label) return;
-      const raw = cellText(cell.value);
+
+      const raw = cellText(cell);
       if (!raw) return;
+
       const minor = toMinor(raw, 'PLN');
       if (minor === 0) return;
+
       total += minor;
       const assetClass = mapAssetClass(label);
       byAssetClass[assetClass] = (byAssetClass[assetClass] ?? 0) + minor;
@@ -203,9 +192,7 @@ export const inwestomatParser: ImportParser = {
       return 0;
     }
     try {
-      const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
-      const names = workbook.worksheets.map((w) => fold(w.name));
+      const names = readXlsx(buffer).map((sheet) => fold(sheet.name));
       const hasTransactions = names.some((n) => TRANSACTIONS_SHEET.includes(n));
       const hasSignature = names.some((n) => ['portfolio', 'multi-asset', 'dashboard'].includes(n));
       if (hasTransactions && hasSignature) return 0.95;
@@ -217,25 +204,21 @@ export const inwestomatParser: ImportParser = {
   },
 
   async parse(buffer: Buffer, mapping?: ColumnMapping): Promise<ParseResult> {
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
+    const sheets = readXlsx(buffer);
     const notes: string[] = [];
 
-    const sheet = findSheet(workbook, TRANSACTIONS_SHEET);
+    const sheet = findSheet(sheets, TRANSACTIONS_SHEET);
     if (!sheet) {
       return {
         rows: [],
-        detectedColumns: workbook.worksheets.map((w) => w.name),
+        detectedColumns: sheets.map((w) => w.name),
         notes: ['Nie znalazłem arkusza "Transakcje". Wskaż kolumny ręcznie albo sprawdź plik.'],
       };
     }
 
     const header = locateHeader(sheet, mapping);
     if (!header) {
-      const firstRow: string[] = [];
-      sheet.getRow(1).eachCell({ includeEmpty: true }, (cell, col) => {
-        firstRow[col - 1] = cellText(cell.value).trim();
-      });
+      const firstRow = (sheet.rows[0] ?? []).map((cell) => cellText(cell).trim());
       return {
         rows: [],
         detectedColumns: firstRow.filter(Boolean),
@@ -246,20 +229,20 @@ export const inwestomatParser: ImportParser = {
       };
     }
 
-    const col = (field: string): number | undefined => header.columns.get(field);
     const rows: ParsedRow[] = [];
     let skipped = 0;
 
-    for (let r = header.rowNumber + 1; r <= sheet.rowCount; r += 1) {
-      const excelRow = sheet.getRow(r);
-      const read = (field: string): string => {
-        const index = col(field);
-        return index === undefined ? '' : cellText(excelRow.getCell(index).value).trim();
-      };
+    for (let r = header.rowIndex + 1; r < sheet.rows.length; r += 1) {
+      const sheetRow = sheet.rows[r];
+      const read = (field: string): string =>
+        cellText(cellAt(sheetRow, header.columns.get(field))).trim();
+      // Daty Excel trzyma jako numery seryjne. Konwersja na tekst przed
+      // normalizacją gubiłaby tę informację, więc datę czytamy surową.
+      const readRaw = (field: string): CellValue => cellAt(sheetRow, header.columns.get(field));
 
-      const rawDate = read('date');
+      const rawDate = readRaw('date');
       const rawType = read('type');
-      if (!rawDate && !rawType) continue;
+      if (rawDate === null && !rawType) continue;
 
       const tradeDate = normalizeDate(rawDate);
       const type = mapType(rawType);
@@ -281,7 +264,7 @@ export const inwestomatParser: ImportParser = {
       const totalPln = read('totalPln');
 
       rows.push({
-        rowId: `${r}`,
+        rowId: `${r + 1}`,
         tradeDate,
         type,
         rawSymbol: isCash ? null : rawSymbol || null,
@@ -304,7 +287,7 @@ export const inwestomatParser: ImportParser = {
       notes.push(`Pominięto ${skipped} wierszy bez rozpoznanej daty lub rodzaju transakcji.`);
     }
 
-    const historySheet = findSheet(workbook, HISTORY_SHEET);
+    const historySheet = findSheet(sheets, HISTORY_SHEET);
     const snapshots = historySheet ? readSnapshots(historySheet) : [];
     if (snapshots.length > 0) {
       notes.push(

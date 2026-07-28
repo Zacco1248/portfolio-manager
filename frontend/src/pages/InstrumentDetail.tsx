@@ -51,7 +51,25 @@ export function InstrumentDetail() {
           {instrument.exchange ?? '—'} · {instrument.currency}
           {instrument.sector ? ` · ${instrument.sector}` : ''}
         </span>
-        <button type="button" className="btn ml-auto text-2xs" onClick={() => void api.instruments.backfill(instrumentId).then(reload)}>
+        {instrument.assetClass === 'metal' && (
+          <label className="ml-auto flex items-center gap-2 text-2xs text-content-muted">
+            Jednostka pozycji
+            <select
+              className="input h-7 w-auto py-0 text-2xs"
+              value={instrument.unit ?? 'oz'}
+              onChange={(e) => void api.instruments.update(instrumentId, { unit: e.target.value }).then(reload)}
+            >
+              <option value="oz">uncja trojańska</option>
+              <option value="g">gram</option>
+              <option value="kg">kilogram</option>
+            </select>
+          </label>
+        )}
+        <button
+          type="button"
+          className={`btn text-2xs ${instrument.assetClass === 'metal' ? '' : 'ml-auto'}`}
+          onClick={() => void api.instruments.backfill(instrumentId).then(reload)}
+        >
           Uzupełnij historię notowań
         </button>
       </header>

@@ -60,6 +60,8 @@ export const instrumentCreateSchema = z.object({
   country: z.string().trim().max(80).optional(),
   provider: z.string().trim().max(40).optional(),
   providerSymbol: z.string().trim().max(60).optional(),
+  /** Jednostka pozycji dla metali: oz, g, kg. Decyduje o przeliczeniu ceny spot. */
+  unit: z.enum(['oz', 'g', 'kg']).optional(),
 });
 
 export const instrumentUpdateSchema = instrumentCreateSchema.partial();

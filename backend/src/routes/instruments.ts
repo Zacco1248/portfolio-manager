@@ -56,6 +56,9 @@ instrumentsRouter.post(
         country: parsed.country ?? null,
         provider: parsed.provider ?? null,
         providerSymbol: parsed.providerSymbol ?? null,
+        // Metale bez jawnej jednostki traktujemy jak uncje — spot jest w nich
+        // kwotowany, więc to założenie nie zniekształca wyceny.
+        unit: parsed.unit ?? (parsed.assetClass === 'metal' ? 'oz' : null),
       })
       .returning()
       .get();
@@ -88,6 +91,7 @@ instrumentsRouter.patch('/:id', (req, res, next) => {
       ...(parsed.data.country !== undefined ? { country: parsed.data.country } : {}),
       ...(parsed.data.provider !== undefined ? { provider: parsed.data.provider } : {}),
       ...(parsed.data.providerSymbol !== undefined ? { providerSymbol: parsed.data.providerSymbol } : {}),
+      ...(parsed.data.unit !== undefined ? { unit: parsed.data.unit } : {}),
     })
     .where(eq(instruments.id, id.data))
     .returning()

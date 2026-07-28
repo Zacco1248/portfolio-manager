@@ -54,10 +54,19 @@ export function portfolioXirr(portfolioIds: number[]): XirrResult {
     .orderBy(asc(transactions.tradeDate))
     .all();
 
-  const flows: Cashflow[] = rows
+  let flows: Cashflow[] = rows
     .filter((r) => r.type === 'deposit' || r.type === 'withdrawal')
     // Wpłata do portfela to z punktu widzenia inwestora wydatek, stąd minus.
     .map((r) => ({ date: r.tradeDate, amountMinor: -r.amountPlnMinor }));
+
+  // Portfel przeniesiony papierami od innego brokera nie ma żadnej wpłaty
+  // gotówkowej. Wtedy za zaangażowanie kapitału bierzemy same transakcje na
+  // instrumentach — stopa jest wyliczona z perspektywy pozycji, nie rachunku.
+  if (flows.length === 0) {
+    flows = rows
+      .filter((r) => r.instrumentId !== null && r.amountPlnMinor !== 0)
+      .map((r) => ({ date: r.tradeDate, amountMinor: r.amountPlnMinor }));
+  }
 
   const { positions, cashByPortfolio } = buildPositions(portfolioIds);
   const currentValue =

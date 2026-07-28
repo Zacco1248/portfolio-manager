@@ -2,6 +2,7 @@ import { PRICE_SCALE } from '@portfolio/shared';
 import { addDays, today } from '../lib/dates.js';
 import { config } from '../config.js';
 import { getNbpGoldPrice } from '../services/fx.js';
+import { perGramToUnit } from './units.js';
 import { splitSymbol } from './types.js';
 import type { PriceProvider, ProviderCandle, ProviderInstrument, ProviderQuote } from './types.js';
 
@@ -33,13 +34,12 @@ export const nbpGoldProvider: PriceProvider = {
 
     const prevE8 = await getNbpGoldPrice(addDays(date, -1));
 
-    // NBP podaje cenę za gram; dla pozycji w uncjach przeliczamy na uncję trojańską.
-    const factor = ouncesFactor(instrument);
+    // NBP podaje cenę za gram próby 1000; przeliczamy na jednostkę pozycji.
     return {
-      priceE8: Math.round(priceE8 * factor),
+      priceE8: perGramToUnit(priceE8, instrument.unit),
       currency: 'PLN',
       ts: new Date().toISOString(),
-      prevCloseE8: prevE8 === null ? null : Math.round(prevE8 * factor),
+      prevCloseE8: prevE8 === null ? null : perGramToUnit(prevE8, instrument.unit),
     };
   },
 
@@ -49,21 +49,6 @@ export const nbpGoldProvider: PriceProvider = {
     return [];
   },
 };
-
-const GRAMS_PER_TROY_OUNCE = 31.1034768;
-
-function ouncesFactor(instrument: ProviderInstrument): number {
-  switch ((instrument.unit ?? 'g').toLowerCase()) {
-    case 'oz':
-    case 'ozt':
-    case 'uncja':
-      return GRAMS_PER_TROY_OUNCE;
-    case 'kg':
-      return 1000;
-    default:
-      return 1;
-  }
-}
 
 /**
  * Gotówka: cena zawsze 1 jednostka waluty. Dzięki temu salda walutowe

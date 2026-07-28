@@ -1,8 +1,10 @@
 import { and, eq, gte, inArray, lte } from 'drizzle-orm';
 import { applyBp, isTaxExempt } from '@portfolio/shared';
-import type { RealizedGain, TaxRegime, TaxReport, TaxSection } from '@portfolio/shared';
+import type { LossCarryForward, RealizedGain, TaxRegime, TaxReport, TaxSection } from '@portfolio/shared';
 import { db } from '../db/index.js';
 import { instruments, portfolios, realizedGains, transactions } from '../db/schema.js';
+import { computeCryptoCarryForward, computeSecuritiesCarryForward } from './loss-carry.js';
+import type { YearResult } from './loss-carry.js';
 
 /**
  * Zestawienie pod PIT-38.
@@ -77,8 +79,14 @@ export function buildTaxReport(year: number, portfolioId?: number): TaxReport {
     };
   };
 
-  const securities = buildSection(gains.filter((g) => g.taxCategory === 'securities').map(toDto));
-  const crypto = buildSection(gains.filter((g) => g.taxCategory === 'crypto').map(toDto));
+  const securities = buildSection(
+    gains.filter((g) => g.taxCategory === 'securities').map(toDto),
+    securitiesCarry(year, taxableIds),
+  );
+  const crypto = buildSection(
+    gains.filter((g) => g.taxCategory === 'crypto').map(toDto),
+    cryptoCarry(year, taxableIds),
+  );
 
   return {
     year,
@@ -92,18 +100,75 @@ export function buildTaxReport(year: number, portfolioId?: number): TaxReport {
   };
 }
 
-function buildSection(entries: RealizedGain[]): TaxSection {
+function buildSection(entries: RealizedGain[], carry: LossCarryForward | null): TaxSection {
   const revenue = entries.reduce((sum, e) => sum + e.taxProceedsPlnMinor, 0);
   const cost = entries.reduce((sum, e) => sum + e.taxCostPlnMinor, 0);
   const gain = revenue - cost;
+
+  // Podstawą opodatkowania jest dochód pomniejszony o rozliczone straty
+  // z lat ubiegłych. Sama strata nie generuje podatku.
+  const taxable = carry ? carry.taxableGainPlnMinor : gain;
 
   return {
     revenuePlnMinor: revenue,
     costPlnMinor: cost,
     gainPlnMinor: gain,
-    // Strata nie generuje podatku — rozlicza się ją w kolejnych latach.
-    taxPlnMinor: gain > 0 ? applyBp(gain, CAPITAL_GAINS_TAX_BP) : 0,
+    taxPlnMinor: taxable > 0 ? applyBp(taxable, CAPITAL_GAINS_TAX_BP) : 0,
     entries: entries.sort((a, b) => (a.saleDate < b.saleDate ? -1 : 1)),
+    lossCarryForward: carry,
+  };
+}
+
+/** Wyniki roczne danej kategorii — podstawa symulacji strat z lat ubiegłych. */
+function yearlyResults(taxableIds: number[], category: 'securities' | 'crypto'): YearResult[] {
+  const rows = db
+    .select()
+    .from(realizedGains)
+    .where(inArray(realizedGains.portfolioId, taxableIds))
+    .all()
+    .filter((g) => !g.taxExempt && g.taxCategory === category);
+
+  const byYear = new Map<number, number>();
+  for (const row of rows) {
+    byYear.set(row.year, (byYear.get(row.year) ?? 0) + (row.taxProceedsPlnMinor - row.taxCostPlnMinor));
+  }
+
+  return [...byYear.entries()].map(([year, gainPlnMinor]) => ({ year, gainPlnMinor }));
+}
+
+function securitiesCarry(year: number, taxableIds: number[]): LossCarryForward | null {
+  const history = yearlyResults(taxableIds, 'securities');
+  if (history.every((y) => y.gainPlnMinor >= 0)) return null;
+
+  const result = computeSecuritiesCarryForward(history, year);
+  return {
+    regime: 'securities',
+    availablePlnMinor: result.availablePlnMinor,
+    appliedPlnMinor: result.appliedPlnMinor,
+    taxableGainPlnMinor: result.taxableGainPlnMinor,
+    carryToNextYearPlnMinor: result.remaining.reduce((sum, r) => sum + r.remainingPlnMinor, 0),
+    expiredPlnMinor: result.expiredPlnMinor,
+    note:
+      'Stratę z papierów wartościowych odlicza się przez pięć kolejnych lat, ' +
+      'maksymalnie 50% jej wysokości w jednym roku. Reszta po pięciu latach przepada.',
+  };
+}
+
+function cryptoCarry(year: number, taxableIds: number[]): LossCarryForward | null {
+  const history = yearlyResults(taxableIds, 'crypto');
+  if (history.every((y) => y.gainPlnMinor >= 0)) return null;
+
+  const result = computeCryptoCarryForward(history, year);
+  return {
+    regime: 'crypto',
+    availablePlnMinor: result.carriedCostPlnMinor,
+    appliedPlnMinor: result.carriedCostPlnMinor,
+    taxableGainPlnMinor: result.taxableGainPlnMinor,
+    carryToNextYearPlnMinor: result.carryToNextYearPlnMinor,
+    expiredPlnMinor: 0,
+    note:
+      'Przy kryptowalutach nadwyżka kosztów nad przychodami nie jest stratą, tylko powiększa ' +
+      'koszty uzyskania przychodu w roku następnym — bez limitu procentowego i bezterminowo.',
   };
 }
 
@@ -132,6 +197,18 @@ function buildDividends(
   let gross = 0;
   let withholding = 0;
 
+  /**
+   * Ten sam podatek u źródła może przyjść dwiema drogami: przy dywidendzie
+   * (arkusz Inwestomatu) albo osobnym wierszem (wyciąg XTB). Zliczenie obu
+   * zawyżyłoby odliczenie, więc pamiętamy pary instrument+data, dla których
+   * podatek został już ujęty razem z dywidendą.
+   */
+  const withholdingSeen = new Set(
+    rows
+      .filter((r) => r.type === 'dividend' && r.taxMinor > 0)
+      .map((r) => `${r.instrumentId ?? 'x'}|${r.tradeDate}`),
+  );
+
   for (const row of rows) {
     const instrument = row.instrumentId ? instrumentMap.get(row.instrumentId) : undefined;
 
@@ -154,7 +231,10 @@ function buildDividends(
     }
 
     // XTB księguje podatek u źródła jako osobną operację, nie jako pole
-    // przy dywidendzie — doliczamy ją do puli potrąceń.
+    // przy dywidendzie — doliczamy ją do puli potrąceń, chyba że ta sama
+    // kwota została już ujęta przy dywidendzie z innego źródła.
+    if (withholdingSeen.has(`${row.instrumentId ?? 'x'}|${row.tradeDate}`)) continue;
+
     const whtPln = Math.abs(Math.round((row.grossMinor * row.fxRateE6) / 1_000_000));
     withholding += whtPln;
     entries.push({
@@ -188,6 +268,7 @@ function emptyReport(year: number, excluded: TaxReport['excludedPortfolios']): T
     gainPlnMinor: 0,
     taxPlnMinor: 0,
     entries: [],
+    lossCarryForward: null,
   };
   return {
     year,
@@ -253,6 +334,20 @@ export function taxReportToCsv(report: TaxReport): string {
         .map(esc)
         .join(';'),
     );
+    if (section.lossCarryForward) {
+      const carry = section.lossCarryForward;
+      lines.push(
+        ['Odliczona strata z lat ubieglych', '', '', '', '', '', money(carry.appliedPlnMinor)].map(esc).join(';'),
+      );
+      lines.push(
+        ['Podstawa po odliczeniu', '', '', '', '', '', money(carry.taxableGainPlnMinor)].map(esc).join(';'),
+      );
+      lines.push(
+        ['Strata do rozliczenia w kolejnych latach', '', '', '', '', '', money(carry.carryToNextYearPlnMinor)]
+          .map(esc)
+          .join(';'),
+      );
+    }
     lines.push(['Podatek 19%', '', '', '', '', '', money(section.taxPlnMinor)].map(esc).join(';'));
     lines.push('');
   }

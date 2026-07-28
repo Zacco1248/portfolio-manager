@@ -4,6 +4,7 @@ import type { IsoDate } from '../lib/dates.js';
 import { fetchJson } from '../lib/http-client.js';
 import { createLogger } from '../lib/logger.js';
 import type { PriceProvider, ProviderCandle, ProviderInstrument, ProviderQuote } from './types.js';
+import { perOunceToUnit } from './units.js';
 import { splitSymbol } from './types.js';
 
 const log = createLogger('provider:yahoo');
@@ -48,7 +49,13 @@ const MARKET_SUFFIX: Record<string, string> = {
   US: '',
 };
 
-/** Kontrakty terminowe używane jako proxy ceny spot metali (USD za uncję trojańską). */
+/**
+ * Kontrakty terminowe używane jako proxy ceny spot metali.
+ *
+ * Wszystkie są kwotowane w USD za uncję trojańską, więc dla pozycji
+ * prowadzonych w gramach albo kilogramach cena musi zostać przeliczona
+ * na jednostkę instrumentu — inaczej wycena jest zawyżona ponad 31-krotnie.
+ */
 const METAL_SYMBOLS: Record<string, string> = {
   XAU: 'GC=F',
   GOLD: 'GC=F',
@@ -165,11 +172,16 @@ export const yahooProvider: PriceProvider = {
     }
 
     const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? null;
+    // Dla metali kwotowanie jest za uncję trojańską niezależnie od tego,
+    // w czym użytkownik prowadzi pozycję.
+    const toUnit = (value: number): number =>
+      instrument.assetClass === 'metal' ? perOunceToUnit(value, instrument.unit) : value;
+
     return {
-      priceE8: toPrice(meta.regularMarketPrice!),
+      priceE8: toUnit(toPrice(meta.regularMarketPrice!)),
       currency: (meta.currency ?? instrument.currency).toUpperCase(),
       ts: meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : new Date().toISOString(),
-      prevCloseE8: prevClose === null ? null : toPrice(prevClose),
+      prevCloseE8: prevClose === null ? null : toUnit(toPrice(prevClose)),
     };
   },
 
@@ -184,6 +196,8 @@ export const yahooProvider: PriceProvider = {
 
     const quote = result.indicators.quote?.[0];
     const candles: ProviderCandle[] = [];
+    const toUnit = (value: number | null): number | null =>
+      value !== null && instrument.assetClass === 'metal' ? perOunceToUnit(value, instrument.unit) : value;
 
     for (let i = 0; i < result.timestamp.length; i += 1) {
       const close = quote?.close?.[i];
@@ -195,10 +209,10 @@ export const yahooProvider: PriceProvider = {
 
       candles.push({
         date,
-        openE8: nullablePrice(quote?.open?.[i]),
-        highE8: nullablePrice(quote?.high?.[i]),
-        lowE8: nullablePrice(quote?.low?.[i]),
-        closeE8: toPrice(close),
+        openE8: toUnit(nullablePrice(quote?.open?.[i])),
+        highE8: toUnit(nullablePrice(quote?.high?.[i])),
+        lowE8: toUnit(nullablePrice(quote?.low?.[i])),
+        closeE8: toUnit(toPrice(close))!,
         volume: quote?.volume?.[i] ?? null,
       });
     }

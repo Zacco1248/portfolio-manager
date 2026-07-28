@@ -119,7 +119,7 @@ const CADENCE_BUCKETS: { maxDays: number; label: string; days: number }[] = [
  * Mediana, a nie średnia — pojedyncza wypłata specjalna nie może przesunąć
  * całej prognozy.
  */
-function detectCadence(dates: IsoDate[]): { label: string; days: number } | null {
+export function detectCadence(dates: IsoDate[]): { label: string; days: number } | null {
   if (dates.length < 2) return null;
 
   const gaps: number[] = [];

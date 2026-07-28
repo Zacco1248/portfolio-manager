@@ -34,7 +34,12 @@ export function Positions() {
     });
 
     const direction = ascending ? 1 : -1;
-    return [...filtered].sort((a, b) => direction * (sortValue(a, sortKey) - sortValue(b, sortKey)));
+    return [...filtered].sort((a, b) => {
+      if (sortKey === 'symbol') {
+        return direction * a.instrument.symbol.localeCompare(b.instrument.symbol, 'pl');
+      }
+      return direction * (sortValue(a, sortKey) - sortValue(b, sortKey));
+    });
   }, [data, filter, assetClass, sortKey, ascending]);
 
   if (loading) return <Spinner />;
@@ -209,10 +214,8 @@ function sortValue(position: Position, key: SortKey): number {
       return position.dayChangeBp ?? 0;
     case 'share':
       return position.sharePortfolioBp;
-    case 'symbol':
-      // Kolejność alfabetyczna jako liczba — wystarczy do stabilnego sortowania.
-      return position.instrument.symbol.charCodeAt(0) * 1000 + (position.instrument.symbol.charCodeAt(1) || 0);
     default:
+      // Sortowanie po tickerze jest tekstowe i obsłużone osobno.
       return 0;
   }
 }

@@ -265,7 +265,7 @@ export async function commitImport(batchId: number, acceptedRowIds: string[]): P
       continue;
     }
     try {
-      await createTransaction({ ...input, importBatchId: batchId });
+      await createTransaction({ ...input, importBatchId: batchId, deferRecompute: true });
       imported += 1;
     } catch (err) {
       // Ograniczenie unikalności na row_hash oznacza, że wiersz już istnieje —
@@ -284,10 +284,14 @@ export async function commitImport(batchId: number, acceptedRowIds: string[]): P
     .where(eq(importBatches.id, batchId))
     .run();
 
-  // Pojedyncze wstawienia przeliczały FIFO po każdej transakcji; na koniec
-  // robimy jedno pełne przeliczenie portfela, żeby kolejność była na pewno
-  // chronologiczna niezależnie od kolejności wierszy w pliku.
-  recomputeRealizedGains(batch.portfolioId);
+  // Wiersze wstawiamy bez przeliczania FIFO, a na końcu robimy jedno pełne
+  // przeliczenie portfela. Kolejność chronologiczna i tak jest odtwarzana
+  // wewnątrz silnika, więc wynik jest identyczny, a koszt liniowy zamiast
+  // kwadratowego.
+  const warnings = recomputeRealizedGains(batch.portfolioId);
+  if (warnings.length > 0) {
+    for (const warning of warnings.slice(0, 20)) errors.push({ rowId: '-', message: warning });
+  }
 
   log.info(`Import #${batchId}: zapisano ${imported}, pominięto ${skipped}, błędów ${errors.length}`);
   return { batchId, imported, skipped, errors };

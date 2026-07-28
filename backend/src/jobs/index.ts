@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
-import cron from 'node-cron';
+import { schedule as cronSchedule } from 'node-cron';
+import type { ScheduledTask } from 'node-cron';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { jobRuns } from '../db/schema.js';
@@ -10,7 +11,7 @@ import { purgeExpiredSessions } from '../services/auth.js';
 import { registerDataJobs } from './data-jobs.js';
 
 const log = createLogger('cron');
-const tasks: cron.ScheduledTask[] = [];
+const tasks: ScheduledTask[] = [];
 
 /**
  * Opakowanie zadania: każde uruchomienie ląduje w `job_runs`, a wyjątek nigdy
@@ -46,7 +47,7 @@ export function schedule(
     log.info(`Zadanie ${name} wyłączone w konfiguracji`);
     return;
   }
-  const task = cron.schedule(expression, () => void runJob(name, fn), { timezone: config.timezone });
+  const task = cronSchedule(expression, () => void runJob(name, fn), { timezone: config.timezone });
   tasks.push(task);
   log.info(`Zadanie ${name} zaplanowane: ${expression}`);
 }

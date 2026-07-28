@@ -11,7 +11,6 @@ const log = createLogger('seed');
  */
 export function seedDefaults(): void {
   seedPortfolio();
-  seedCashInstruments();
   seedSettings();
 }
 
@@ -24,32 +23,12 @@ function seedPortfolio(): void {
   log.info('Utworzono domyślny portfel "Główny"');
 }
 
-/**
- * Gotówka w każdej walucie jest zwykłym instrumentem klasy `cash` o cenie 1.
- * Dzięki temu wpłaty i salda walutowe przechodzą przez tę samą ścieżkę wyceny
- * co reszta pozycji, zamiast być osobnym przypadkiem w każdej kalkulacji.
+/*
+ * Instrumenty gotówkowe (CASH:PLN i podobne) były tu wcześniej zakładane
+ * z góry. Zostały usunięte: saldo gotówki wyliczamy z podpisanych przepływów
+ * transakcji, więc te rekordy nie brały udziału w żadnej wycenie, a zaśmiecały
+ * listy wyboru instrumentu w formularzach.
  */
-const CASH_CURRENCIES = ['PLN', 'USD', 'EUR', 'GBP', 'CHF', 'DKK', 'SEK', 'NOK', 'CZK'] as const;
-
-function seedCashInstruments(): void {
-  const existing = new Set(db.select().from(instruments).all().map((i) => i.symbol));
-  const missing = CASH_CURRENCIES.filter((c) => !existing.has(`CASH:${c}`));
-  if (missing.length === 0) return;
-
-  db.insert(instruments)
-    .values(
-      missing.map((currency) => ({
-        symbol: `CASH:${currency}`,
-        name: `Gotówka ${currency}`,
-        assetClass: 'cash',
-        currency,
-        provider: 'static',
-        providerSymbol: currency,
-      })),
-    )
-    .run();
-  log.info(`Dodano instrumenty gotówkowe: ${missing.join(', ')}`);
-}
 
 const DEFAULT_SETTINGS: Record<string, unknown> = {
   theme: 'dark',

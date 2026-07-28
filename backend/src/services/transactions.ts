@@ -192,7 +192,16 @@ export interface CreateResult {
 }
 
 export async function createTransaction(
-  input: TransactionCreateInput & { rowHash?: string | null; importBatchId?: number | null },
+  input: TransactionCreateInput & {
+    rowHash?: string | null;
+    importBatchId?: number | null;
+    /**
+     * Tryb wsadowy: pomija przeliczenie FIFO po tej transakcji. Import wywołuje
+     * jedno przeliczenie na końcu — bez tego wgranie n wierszy kosztowałoby
+     * n pełnych przeliczeń portfela.
+     */
+    deferRecompute?: boolean;
+  },
 ): Promise<CreateResult> {
   const portfolio = db.select().from(portfolios).where(eq(portfolios.id, input.portfolioId)).get();
   if (!portfolio) throw notFound('Nie ma takiego portfela');
@@ -209,6 +218,8 @@ export async function createTransaction(
     .values({ ...prepared, importBatchId: input.importBatchId ?? null })
     .returning()
     .get();
+
+  if (input.deferRecompute) return { transaction: row, warnings: [] };
 
   const warnings = recomputeRealizedGains(prepared.portfolioId, prepared.instrumentId);
   return { transaction: row, warnings };

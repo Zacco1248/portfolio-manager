@@ -185,6 +185,9 @@ function TransactionForm({
           name: newInstrument.name,
           assetClass: newInstrument.assetClass,
           currency: form.currency,
+          // Notowania metali są kwotowane za uncję trojańską; jednostkę
+          // pozycji można zmienić później na stronie instrumentu.
+          ...(newInstrument.assetClass === 'metal' ? { unit: 'oz' } : {}),
         });
         instrumentId = created.id;
       }

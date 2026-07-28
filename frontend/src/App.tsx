@@ -1,22 +1,31 @@
+import { Suspense, lazy } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import { Layout } from '@/components/Layout';
 import { Spinner } from '@/components/ui';
-import { Alerts } from '@/pages/Alerts';
-import { Analysis } from '@/pages/Analysis';
-import { Bonds } from '@/pages/Bonds';
 import { Dashboard } from '@/pages/Dashboard';
-import { Dividends } from '@/pages/Dividends';
-import { Help } from '@/pages/Help';
-import { ImportPage } from '@/pages/Import';
-import { InstrumentDetail } from '@/pages/InstrumentDetail';
 import { Login } from '@/pages/Login';
-import { News } from '@/pages/News';
-import { Positions } from '@/pages/Positions';
-import { Rebalance } from '@/pages/Rebalance';
-import { Settings } from '@/pages/Settings';
-import { Tax } from '@/pages/Tax';
-import { Transactions } from '@/pages/Transactions';
 import { useApp } from '@/state/app';
+
+/**
+ * Pulpit i logowanie ładują się od razu — to pierwsze, co użytkownik widzi.
+ * Reszta widoków jest doładowywana na żądanie: same wykresy Recharts ważą
+ * większość bundla, a przez tailnet na telefonie to zauważalna różnica.
+ */
+const Alerts = lazy(() => import('@/pages/Alerts').then((m) => ({ default: m.Alerts })));
+const Analysis = lazy(() => import('@/pages/Analysis').then((m) => ({ default: m.Analysis })));
+const Bonds = lazy(() => import('@/pages/Bonds').then((m) => ({ default: m.Bonds })));
+const Dividends = lazy(() => import('@/pages/Dividends').then((m) => ({ default: m.Dividends })));
+const Help = lazy(() => import('@/pages/Help').then((m) => ({ default: m.Help })));
+const ImportPage = lazy(() => import('@/pages/Import').then((m) => ({ default: m.ImportPage })));
+const InstrumentDetail = lazy(() =>
+  import('@/pages/InstrumentDetail').then((m) => ({ default: m.InstrumentDetail })),
+);
+const News = lazy(() => import('@/pages/News').then((m) => ({ default: m.News })));
+const Positions = lazy(() => import('@/pages/Positions').then((m) => ({ default: m.Positions })));
+const Rebalance = lazy(() => import('@/pages/Rebalance').then((m) => ({ default: m.Rebalance })));
+const Settings = lazy(() => import('@/pages/Settings').then((m) => ({ default: m.Settings })));
+const Tax = lazy(() => import('@/pages/Tax').then((m) => ({ default: m.Tax })));
+const Transactions = lazy(() => import('@/pages/Transactions').then((m) => ({ default: m.Transactions })));
 
 export function App() {
   const { authenticated } = useApp();
@@ -28,7 +37,13 @@ export function App() {
 
   return (
     <Routes>
-      <Route element={<Layout />}>
+      <Route
+        element={
+          <Suspense fallback={<Spinner />}>
+            <Layout />
+          </Suspense>
+        }
+      >
         <Route index element={<Dashboard />} />
         <Route path="pozycje" element={<Positions />} />
         <Route path="transakcje" element={<Transactions />} />

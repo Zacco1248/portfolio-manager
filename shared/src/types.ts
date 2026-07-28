@@ -47,6 +47,8 @@ export interface Instrument {
   country: string | null;
   provider: string | null;
   providerSymbol: string | null;
+  /** Jednostka pozycji dla metali (oz, g, kg); null dla pozostałych klas. */
+  unit: string | null;
 }
 
 export interface Transaction {
@@ -431,9 +433,26 @@ export interface TaxReport {
 export interface TaxSection {
   revenuePlnMinor: number;
   costPlnMinor: number;
+  /** Wynik roku przed uwzględnieniem strat z lat ubiegłych. */
   gainPlnMinor: number;
   taxPlnMinor: number;
   entries: RealizedGain[];
+  /** Rozliczenie strat z lat poprzednich; null gdy nie ma czego rozliczać. */
+  lossCarryForward: LossCarryForward | null;
+}
+
+export interface LossCarryForward {
+  /** securities — limit 50% rocznie przez 5 lat; crypto — pełne przeniesienie kosztów. */
+  regime: 'securities' | 'crypto';
+  availablePlnMinor: number;
+  appliedPlnMinor: number;
+  /** Podstawa opodatkowania po odliczeniu. */
+  taxableGainPlnMinor: number;
+  /** Co zostaje na kolejne lata. */
+  carryToNextYearPlnMinor: number;
+  /** Ile przepadło z upływem pięciu lat (tylko papiery wartościowe). */
+  expiredPlnMinor: number;
+  note: string;
 }
 
 export interface SystemStatus {

@@ -3,10 +3,11 @@ import { ALERT_KIND_LABELS, changeBp, formatMinor } from '@portfolio/shared';
 import type { AlertKind, Position } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
-import { alertEvents, alerts, instruments, newsItems, reportDates } from '../db/schema.js';
+import { alertEvents, alerts, bondHoldings, instruments, newsItems, portfolios, reportDates } from '../db/schema.js';
 import { addDays, nowIso, today } from '../lib/dates.js';
 import { createLogger } from '../lib/logger.js';
 import { activePortfolioIds, buildPositions } from './positions.js';
+import { getLatestPrice } from './prices.js';
 import { buildPlan } from './rebalance.js';
 import { loadTargets } from './targets.js';
 import { getSetting } from './settings.js';
@@ -52,7 +53,7 @@ export async function evaluateAlerts(): Promise<string> {
 
     switch (alert.kind as AlertKind) {
       case 'price':
-        hit = checkPrice(alert.id, alert.instrumentId, condition, positionByInstrument);
+        hit = checkPrice(alert.id, alert.instrumentId, condition);
         break;
       case 'daily_move':
         hit = checkDailyMove(alert.id, alert.instrumentId, condition, positions);
@@ -73,8 +74,9 @@ export async function evaluateAlerts(): Promise<string> {
     }
   }
 
-  // Alerty globalne nie mają definicji w tabeli — wynikają z ustawień.
+  // Alerty globalne nie mają definicji w tabeli — wynikają z ustawień i danych.
   triggered.push(...checkAllocationDrift(portfolioIds, positions, cashByPortfolio));
+  triggered.push(...checkBondMaturity());
 
   if (triggered.length === 0) return 'brak nowych alertów';
 
@@ -115,25 +117,35 @@ function isKindEnabled(kind: AlertKind): boolean {
   return notifications[kind] !== false;
 }
 
+/**
+ * Alert cenowy czyta notowanie wprost z cache'u cen, a nie z listy pozycji.
+ *
+ * Instrument z watchlisty nie ma pozycji w portfelu — opieranie się na
+ * `buildPositions` sprawiało, że alert dla obserwowanej, ale jeszcze
+ * niekupionej spółki nigdy się nie odpalał.
+ */
 function checkPrice(
   alertId: number,
   instrumentId: number | null,
   condition: Record<string, unknown>,
-  positions: Map<number, Position>,
 ): TriggeredAlert | null {
   if (!instrumentId) return null;
-  const position = positions.get(instrumentId);
-  if (!position?.priceE8) return null;
+
+  const instrument = db.select().from(instruments).where(eq(instruments.id, instrumentId)).get();
+  if (!instrument) return null;
+
+  const latest = getLatestPrice(instrumentId, instrument.currency);
+  if (!latest) return null;
 
   const above = typeof condition.above === 'number' ? condition.above : null;
   const below = typeof condition.below === 'number' ? condition.below : null;
-  const price = position.priceE8 / 1e8;
+  const price = latest.priceE8 / 1e8;
 
   if (above !== null && price >= above) {
     return {
       alertId,
       kind: 'price',
-      message: `${position.instrument.symbol}: cena ${price.toFixed(2)} ${position.instrument.currency} przekroczyła próg ${above}.`,
+      message: `${instrument.symbol}: cena ${price.toFixed(2)} ${latest.currency} przekroczyła próg ${above}.`,
       payload: { instrumentId, price, threshold: above, direction: 'above' },
     };
   }
@@ -141,7 +153,7 @@ function checkPrice(
     return {
       alertId,
       kind: 'price',
-      message: `${position.instrument.symbol}: cena ${price.toFixed(2)} ${position.instrument.currency} spadła poniżej progu ${below}.`,
+      message: `${instrument.symbol}: cena ${price.toFixed(2)} ${latest.currency} spadła poniżej progu ${below}.`,
       payload: { instrumentId, price, threshold: below, direction: 'below' },
     };
   }
@@ -271,6 +283,37 @@ function checkAllocationDrift(
       payload: { breached: breached.map((a) => a.key) },
     },
   ];
+}
+
+/**
+ * Zbliżający się wykup obligacji detalicznej.
+ *
+ * Termin jest znany z góry z parametrów emisji, więc nie wymaga żadnego
+ * zewnętrznego źródła — wystarczy przypomnieć zawczasu, żeby zdążyć
+ * zdecydować o zamianie na nową emisję.
+ */
+const BOND_MATURITY_NOTICE_DAYS = 30;
+
+function checkBondMaturity(): TriggeredAlert[] {
+  if (!isKindEnabled('report_date')) return [];
+
+  const day = today(config.timezone);
+  const horizon = addDays(day, BOND_MATURITY_NOTICE_DAYS);
+  const portfolioNames = new Map(db.select().from(portfolios).all().map((p) => [p.id, p.name]));
+
+  return db
+    .select()
+    .from(bondHoldings)
+    .all()
+    .filter((bond) => bond.redeemedAt === null && bond.maturityDate >= day && bond.maturityDate <= horizon)
+    .map((bond) => ({
+      alertId: null,
+      kind: 'report_date' as AlertKind,
+      message:
+        `Obligacje ${bond.series} (${portfolioNames.get(bond.portfolioId) ?? 'portfel'}) ` +
+        `zapadają ${bond.maturityDate}. Zdecyduj o wykupie albo zamianie na nową emisję.`,
+      payload: { bondId: bond.id, maturityDate: bond.maturityDate },
+    }));
 }
 
 /** Ostatnie zdarzenia — feed w interfejsie. */

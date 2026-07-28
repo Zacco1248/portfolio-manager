@@ -30,6 +30,7 @@ export function toInstrumentDto(row: InstrumentRow): Instrument {
     country: row.country,
     provider: row.provider,
     providerSymbol: row.providerSymbol,
+    unit: row.unit,
   };
 }
 

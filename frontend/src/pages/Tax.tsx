@@ -97,6 +97,30 @@ function SectionCard({ title, section }: { title: string; section: TaxSection })
         <Summary label="Podatek 19%" value={formatPln(section.taxPlnMinor)} highlight />
       </div>
 
+      {section.lossCarryForward && (
+        <div className="mx-4 mb-3 rounded-card border border-surface-border bg-surface-overlay px-3 py-2">
+          <div className="grid grid-cols-2 gap-2 text-2xs sm:grid-cols-4">
+            <Summary label="Strata dostępna" value={formatPln(section.lossCarryForward.availablePlnMinor)} />
+            <Summary label="Odliczono" value={formatPln(section.lossCarryForward.appliedPlnMinor)} />
+            <Summary
+              label="Podstawa po odliczeniu"
+              value={formatPln(section.lossCarryForward.taxableGainPlnMinor)}
+              highlight
+            />
+            <Summary
+              label="Zostaje na później"
+              value={formatPln(section.lossCarryForward.carryToNextYearPlnMinor)}
+            />
+          </div>
+          <p className="mt-2 text-2xs text-content-muted">{section.lossCarryForward.note}</p>
+          {section.lossCarryForward.expiredPlnMinor > 0 && (
+            <p className="mt-1 text-2xs text-warn">
+              Przepadło z upływem pięciu lat: {formatPln(section.lossCarryForward.expiredPlnMinor)}.
+            </p>
+          )}
+        </div>
+      )}
+
       {section.entries.length === 0 ? (
         <p className="px-4 pb-4 text-2xs text-content-muted">Brak transakcji w tym roku.</p>
       ) : (

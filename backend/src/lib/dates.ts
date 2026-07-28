@@ -122,6 +122,13 @@ export function normalizeDate(input: string | Date | number | null | undefined):
   const s = input.trim();
   if (DATE_RE.test(s)) return s;
 
+  // Numer seryjny Excela, który po drodze zamienił się w tekst. Zakres
+  // odpowiada latom 1954-2091 — poza nim ciąg cyfr to na pewno nie data.
+  if (/^\d{5}(\.\d+)?$/.test(s)) {
+    const serial = Number(s);
+    if (serial >= 20_000 && serial <= 70_000) return normalizeDate(serial);
+  }
+
   let m = /^(\d{4})-(\d{2})-(\d{2})[T ]/.exec(s);
   if (m) return `${m[1]}-${m[2]}-${m[3]}`;
 
