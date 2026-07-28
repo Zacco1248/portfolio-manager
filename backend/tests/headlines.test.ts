@@ -3,6 +3,7 @@ import {
   headlineImportance,
   looksMarketRelated,
   looksPolicyRelated,
+  mentionsCompany,
   sectorContext,
   stripPublisher,
 } from '../src/lib/headlines.js';
@@ -110,5 +111,24 @@ describe('polska odmiana nazwy spółki', () => {
 
   it('nie rozciąga dopasowania na obce słowa', () => {
     expect(mentionsInstrument('Nowy orzeł na godle', orlen)).toBe(false);
+  });
+});
+
+describe('ticker kontra zwykłe słowo', () => {
+  const biomed = { symbol: 'WSE:BIO', name: 'Biomed-Lublin SA' };
+
+  it('krótki ticker nie łapie środka polskiego słowa', () => {
+    // „BIO" + końcówka fleksyjna trafiało w „biorą" i wciągało doniesienia
+    // z Bejrutu do wiadomości o spółce biotechnologicznej.
+    expect(mentionsCompany('Władze w Bejrucie biorą się za Hezbollah', biomed)).toBe(false);
+    expect(mentionsCompany('Turyści odbiorą odszkodowania za odwołane rezerwacje', biomed)).toBe(false);
+  });
+
+  it('ticker jako samodzielne słowo nadal działa', () => {
+    expect(mentionsCompany('Akcje BIO w górę po komunikacie', biomed)).toBe(true);
+  });
+
+  it('nazwa spółki działa z odmianą', () => {
+    expect(mentionsCompany('Wyniki Biomedu powyżej oczekiwań', biomed)).toBe(true);
   });
 });

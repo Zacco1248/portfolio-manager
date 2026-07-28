@@ -13,7 +13,8 @@ import { looksMarketRelated, stripPublisher } from '../lib/headlines.js';
 import { parseFeed } from '../lib/rss.js';
 import type { FeedEntry } from '../lib/rss.js';
 import { createLogger } from '../lib/logger.js';
-import { analyzeNewsBatch, isAiEnabled } from './ai.js';
+import { analyzeNewsBatch } from './ai.js';
+import { checkFeature } from './ai-config.js';
 import { instrumentsNeedingPrices } from './prices.js';
 
 const log = createLogger('news');
@@ -192,9 +193,11 @@ export async function fetchNewsFor(targets: InstrumentRow[]): Promise<string> {
               source: source.id,
               url: entry.url,
               urlHash: urlHash(entry.url),
-              title: entry.title,
+              // Nazwę wydawcy odcinamy przy zapisie, nie przy wyświetlaniu:
+              // „… - XTB.com" w tytule sugerowałoby, że to wiadomość o XTB.
+              title: stripPublisher(entry.title),
               publishedAt: entry.publishedAt,
-              rawSummary: entry.summary,
+              rawSummary: cleanSummary(entry.summary),
             })
             .onConflictDoNothing()
             .run();
@@ -222,7 +225,10 @@ function mentionsInstrument(entry: FeedEntry, instrument: InstrumentRow): boolea
  * Bez klucza API nic nie robi — to nie jest błąd, tylko tryb okrojony.
  */
 export async function analyzePendingNews(): Promise<string> {
-  if (!isAiEnabled()) return 'analiza AI wyłączona (brak ANTHROPIC_API_KEY)';
+  // Powód bierzemy z konfiguracji, zamiast zgadywać: funkcja bywa wyłączona
+  // mimo obecnego klucza, a poprzedni komunikat obwiniał zawsze brak klucza.
+  const availability = checkFeature('news');
+  if (!availability.enabled) return `analiza AI pominięta — ${availability.reason ?? 'funkcja niedostępna'}`;
 
   const pending = db
     .select()
@@ -339,9 +345,36 @@ export function listWatchlist(): InstrumentRow[] {
 }
 
 /** Skraca zajawkę ze źródła do długości, która mieści się pod tytułem. */
+/**
+ * Oczyszczenie zajawki z kanału.
+ *
+ * Wyszukiwarka wiadomości podaje w opisie surowy fragment HTML — zwykle sam
+ * odnośnik do artykułu. Wyświetlony dosłownie wyglądał jak wklejony kod,
+ * a modelowi zabierał tokeny na znaczniki zamiast na treść.
+ */
+export function cleanSummary(raw: string | null): string | null {
+  if (!raw) return null;
+
+  const text = raw
+    // Najpierw całe elementy z treścią, potem osierocone znaczniki.
+    .replace(/<a[^>]*>([\s\S]*?)<\/a>/gi, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return text.length > 0 ? text : null;
+}
+
 function shortSummary(raw: string | null): string | null {
   if (!raw) return null;
-  const text = raw.replace(/\s+/g, ' ').trim();
+  const text = cleanSummary(raw) ?? '';
   if (text.length === 0) return null;
   if (text.length <= 240) return text;
 
@@ -384,7 +417,7 @@ export async function fetchContextNews(query: string): Promise<number> {
           urlHash: urlHash(entry.url),
           title: stripPublisher(entry.title),
           publishedAt: entry.publishedAt,
-          rawSummary: entry.summary,
+          rawSummary: cleanSummary(entry.summary),
         })
         .onConflictDoNothing()
         .run();

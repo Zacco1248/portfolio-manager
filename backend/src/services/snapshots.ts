@@ -89,26 +89,46 @@ export function readHistory(portfolioIds: number[], from?: IsoDate, to?: IsoDate
     .orderBy(asc(portfolioSnapshots.date))
     .all();
 
-  const byDate = new Map<string, SnapshotPoint>();
+  /*
+   * Portfele mają różne pokrycie dat: jeden ma historię wniesioną z arkusza
+   * od 2023 roku, drugi dopiero od uruchomienia aplikacji. Zwykłe sumowanie
+   * po dacie sprawiało, że w dniu pojawienia się drugiego portfela wartość
+   * i wpłacony kapitał skakały o całą jego wielkość — a stopa zwrotu ważona
+   * czasem czytała ten skok jako gwałtowną zmianę wyceny.
+   *
+   * Dlatego dla każdego portfela przenosimy ostatni znany stan naprzód i
+   * dopiero takie stany sumujemy. Dzień bez pomiaru znaczy „bez zmian",
+   * a nie „portfel zniknął".
+   */
+  const dates = [...new Set(rows.map((row) => row.date))].sort();
+  const byPortfolio = new Map<number, Map<string, (typeof rows)[number]>>();
+
   for (const row of rows) {
-    const existing = byDate.get(row.date);
-    if (existing) {
-      existing.valuePlnMinor += row.valuePlnMinor;
-      existing.investedPlnMinor += row.investedPlnMinor;
-      mergeAssetClasses(existing, row.byAssetClass);
-    } else {
-      const point: SnapshotPoint = {
-        date: row.date,
-        valuePlnMinor: row.valuePlnMinor,
-        investedPlnMinor: row.investedPlnMinor,
-        byAssetClass: {},
-      };
-      mergeAssetClasses(point, row.byAssetClass);
-      byDate.set(row.date, point);
-    }
+    const series = byPortfolio.get(row.portfolioId) ?? new Map();
+    series.set(row.date, row);
+    byPortfolio.set(row.portfolioId, series);
   }
 
-  return [...byDate.values()];
+  const out: SnapshotPoint[] = [];
+  const carried = new Map<number, (typeof rows)[number]>();
+
+  for (const date of dates) {
+    const point: SnapshotPoint = { date, valuePlnMinor: 0, investedPlnMinor: 0, byAssetClass: {} };
+
+    for (const [portfolioId, series] of byPortfolio) {
+      const row = series.get(date) ?? carried.get(portfolioId);
+      if (!row) continue;
+
+      carried.set(portfolioId, row);
+      point.valuePlnMinor += row.valuePlnMinor;
+      point.investedPlnMinor += row.investedPlnMinor;
+      mergeAssetClasses(point, row.byAssetClass);
+    }
+
+    out.push(point);
+  }
+
+  return out;
 }
 
 function mergeAssetClasses(point: SnapshotPoint, source: Record<string, number> | null): void {

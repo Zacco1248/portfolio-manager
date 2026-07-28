@@ -243,13 +243,22 @@ export function mentionsCompany(title: string, instrument: { symbol: string; nam
     .replace(/\s+(S\.?A\.?|SA|PLC|Inc\.?|Corp\.?|N\.V\.|AG|Group)$/i, '')
     .trim()
     .toLowerCase();
-  const firstWord = cleanName.split(/[\s,.]+/)[0] ?? '';
+  // Myślnik dzieli nazwę tak samo jak spacja: „Biomed-Lublin" w prasie
+  // występuje jako „Biomed", „Biomedu".
+  const firstWord = cleanName.split(/[\s,.\-–]+/)[0] ?? '';
 
-  const needles = [cleanName, ticker, firstWord].filter((needle) => needle.length >= 3);
+  /*
+   * Końcówka fleksyjna należy się wyłącznie nazwie. Ticker po polsku się nie
+   * odmienia, a dopuszczenie trzech liter po nim dawało trafienia w środku
+   * zwykłych słów: „BIO" łapało „biorą" w zdaniu o Hezbollahu.
+   */
+  const declinable = [cleanName, firstWord].filter((needle) => needle.length >= 3);
+  const exact = ticker.length >= 3 ? [ticker] : [];
 
-  return needles.some((needle) =>
-    new RegExp(`(^|[^a-z0-9])${escapeRegExp(needle)}[a-ząćęłńóśźż]{0,3}([^a-z0-9]|$)`, 'i').test(haystack),
-  );
+  const matches = (needle: string, suffix: string): boolean =>
+    new RegExp(`(^|[^a-z0-9])${escapeRegExp(needle)}${suffix}([^a-z0-9]|$)`, 'i').test(haystack);
+
+  return declinable.some((needle) => matches(needle, '[a-ząćęłńóśźż]{0,3}')) || exact.some((needle) => matches(needle, ''));
 }
 
 function escapeRegExp(value: string): string {
