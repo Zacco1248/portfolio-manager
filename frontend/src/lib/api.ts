@@ -433,6 +433,7 @@ export interface PriceMoveFacts {
   headlines: { title: string; publishedAt: string; summary: string | null; source: string; linked: boolean }[];
   newsInWindow: number;
   candleCount: number;
+  context: { title: string; publishedAt: string; source: string; policy: boolean }[];
   priceSource: 'baza' | 'dostawca' | null;
 }
 

@@ -115,3 +115,109 @@ export function headlineImportance(title: string, summary?: string | null): numb
   const text = `${title} ${summary ?? ''}`;
   return IMPORTANCE_RULES.find((rule) => rule.match.test(text))?.weight ?? 4;
 }
+
+/**
+ * Otoczenie sektorowe: co poza samą spółką rusza jej kursem.
+ *
+ * Decyzja rządu o regulowaniu cen paliw uderza w rafinerie, choć nazwa spółki
+ * nie pada w niej ani razu. Filtrowanie po nazwie takie teksty przepuszcza,
+ * a bywają one ważniejsze niż wszystko, co spółka sama ogłosiła. Stąd drugi
+ * strumień: wiadomości dobierane po branży i po tym, że dotyczą regulacji,
+ * podatków albo cen surowców.
+ *
+ * `query` służy do dociągnięcia materiału, `keywords` do wyłowienia go
+ * z wiadomości już zebranych.
+ */
+export interface SectorContext {
+  query: string;
+  keywords: string[];
+}
+
+const SECTOR_CONTEXTS: { match: RegExp; context: SectorContext }[] = [
+  {
+    match: /energet|paliw|ropa|rafiner|oil|gas|energy/i,
+    context: {
+      query: 'ceny paliw regulacje rząd akcyza ropa naftowa',
+      keywords: ['cen paliw', 'ceny paliw', 'akcyz', 'ropa', 'rafiner', 'marż', 'opłata paliwow', 'orlen', 'gaz'],
+    },
+  },
+  {
+    match: /finans|bank|ubezpiecz|financial|insurance/i,
+    context: {
+      query: 'stopy procentowe RPP banki podatek regulacje KNF',
+      keywords: ['stop procentow', 'rpp', 'wibor', 'kredyt', 'knf', 'podatek bankow', 'wakacje kredytow', 'frank'],
+    },
+  },
+  {
+    match: /surowc|metal|górnic|mining|materials/i,
+    context: {
+      query: 'ceny miedzi surowce podatek wydobywczy',
+      keywords: ['miedz', 'podatek wydobywcz', 'cen surowc', 'ruda', 'wydobyci'],
+    },
+  },
+  {
+    match: /użyteczn|komunaln|utilit|power/i,
+    context: {
+      query: 'ceny energii taryfy URE mrożenie cen prądu',
+      keywords: ['ceny energii', 'taryf', 'ure', 'mrożeni', 'prąd', 'węgiel', 'emisj'],
+    },
+  },
+  {
+    match: /technolog|technology|gaming|komunikac|communication/i,
+    context: {
+      query: 'regulacje technologiczne podatek cyfrowy AI',
+      keywords: ['podatek cyfrow', 'regulacj', 'sztuczn', 'dane osobow', 'unia europejska'],
+    },
+  },
+  {
+    match: /zdrow|health|pharma/i,
+    context: {
+      query: 'refundacja leków NFZ regulacje farmaceutyczne',
+      keywords: ['refundacj', 'nfz', 'lek', 'ministerstwo zdrowia'],
+    },
+  },
+  {
+    match: /konsump|handel|retail|consumer/i,
+    context: {
+      query: 'handel w niedzielę VAT sprzedaż detaliczna inflacja',
+      keywords: ['handel w niedziel', 'vat', 'sprzedaż detaliczn', 'inflacj', 'płaca minimaln'],
+    },
+  },
+  {
+    match: /nieruchom|real estate|budown/i,
+    context: {
+      query: 'kredyty hipoteczne ceny mieszkań program mieszkaniowy',
+      keywords: ['hipotecz', 'ceny mieszka', 'program mieszkaniow', 'budownictw'],
+    },
+  },
+];
+
+/** Otoczenie właściwe dla sektora; null, gdy sektor nieznany albo nieobsługiwany. */
+export function sectorContext(sector: string | null): SectorContext | null {
+  if (!sector) return null;
+  return SECTOR_CONTEXTS.find((entry) => entry.match.test(sector))?.context ?? null;
+}
+
+/** Sygnały, że wiadomość dotyczy decyzji państwa — istotne dla każdej branży. */
+const POLICY_TERMS = [
+  'rząd',
+  'premier',
+  'ministerstw',
+  'minister ',
+  'sejm',
+  'ustaw',
+  'rozporządzeni',
+  'regulacj',
+  'podatek',
+  'podatku',
+  'akcyz',
+  'urząd',
+  'komisja europejska',
+  'prezes rady ministrów',
+];
+
+/** Czy nagłówek opisuje decyzję władz, która może dotknąć całą branżę. */
+export function looksPolicyRelated(title: string, summary?: string | null): boolean {
+  const text = `${title} ${summary ?? ''}`.toLowerCase();
+  return POLICY_TERMS.some((term) => text.includes(term));
+}

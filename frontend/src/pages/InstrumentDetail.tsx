@@ -299,6 +299,7 @@ function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
           )}
 
           {facts && facts.headlines.length > 0 && <HeadlineList headlines={facts.headlines} />}
+          {facts && facts.context.length > 0 && <ContextList entries={facts.context} />}
 
           {state.result.text ? (
             <p className="whitespace-pre-wrap border-t border-surface-border px-4 py-3 text-sm leading-relaxed text-content-secondary">
@@ -355,6 +356,43 @@ function HeadlineList({ headlines }: { headlines: PriceMoveFacts['headlines'] })
                   ({headline.source}
                   {headline.linked ? '' : ', dopasowana po nazwie'})
                 </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Otoczenie branżowe i regulacyjne.
+ *
+ * Osobno od wiadomości o spółce, bo to inny rodzaj przesłanki: te teksty nie
+ * wymieniają spółki, a mimo to mogą tłumaczyć ruch kursu. Zwinięte domyślnie,
+ * żeby nie przykrywały właściwej listy.
+ */
+function ContextList({ entries }: { entries: PriceMoveFacts['context'] }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="px-4 pb-2">
+      <button
+        type="button"
+        className="text-2xs text-content-muted hover:text-accent"
+        onClick={() => setOpen((current) => !current)}
+      >
+        {open ? '▾' : '▸'} Otoczenie branżowe i decyzje władz ({entries.length})
+      </button>
+      {open && (
+        <ul className="mt-1 space-y-1">
+          {entries.map((entry, index) => (
+            <li key={index} className="flex gap-2 text-2xs">
+              <span className="tabular w-20 shrink-0 text-content-muted">{formatDate(entry.publishedAt)}</span>
+              <span className="text-content-secondary">
+                {entry.policy && <span className="mr-1 text-warn">[władze]</span>}
+                {entry.title}
+                <span className="ml-1 text-content-muted">({entry.source})</span>
               </span>
             </li>
           ))}

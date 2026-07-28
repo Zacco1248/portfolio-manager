@@ -358,3 +358,41 @@ export async function fetchNewsForInstrument(instrumentId: number): Promise<stri
   if (!instrument) return 'nie ma takiego instrumentu';
   return fetchNewsFor([instrument]);
 }
+
+
+/**
+ * Wiadomości z otoczenia rynkowego, niezwiązane z konkretną spółką.
+ *
+ * Zapisujemy je bez `instrumentId` — decyzja rządu o cenach paliw nie należy
+ * do Orlenu, choć go dotyczy. Przypisanie jej do jednej spółki zafałszowałoby
+ * listę jej wiadomości, a nie przypisanie do niczego pozwala korzystać z niej
+ * każdemu, kogo dotyczy.
+ */
+export async function fetchContextNews(query: string): Promise<number> {
+  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=pl&gl=PL&ceid=PL:pl`;
+
+  let inserted = 0;
+
+  try {
+    for (const entry of parseFeed(await fetchText(url, { retries: 1, minIntervalMs: 800 })).slice(0, 20)) {
+      const result = db
+        .insert(newsItems)
+        .values({
+          instrumentId: null,
+          source: 'otoczenie',
+          url: entry.url,
+          urlHash: urlHash(entry.url),
+          title: stripPublisher(entry.title),
+          publishedAt: entry.publishedAt,
+          rawSummary: entry.summary,
+        })
+        .onConflictDoNothing()
+        .run();
+      inserted += result.changes;
+    }
+  } catch (err) {
+    log.warn(`Wiadomości otoczenia („${query}") nieudane: ${errorMessage(err)}`);
+  }
+
+  return inserted;
+}

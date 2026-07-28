@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { headlineImportance, looksMarketRelated, stripPublisher } from '../src/lib/headlines.js';
+import {
+  headlineImportance,
+  looksMarketRelated,
+  looksPolicyRelated,
+  sectorContext,
+  stripPublisher,
+} from '../src/lib/headlines.js';
 import { mentionsInstrument } from '../src/services/ai-assist.js';
 
 const xtb = { symbol: 'WSE:XTB', name: 'XTB S.A.' };
@@ -75,5 +81,34 @@ describe('waga nagłówka', () => {
       .sort((a, b) => b.importance - a.importance);
 
     expect(sorted[0]?.title).toContain('rekomendację');
+  });
+});
+
+describe('otoczenie branżowe', () => {
+  it('dobiera słownik do sektora', () => {
+    expect(sectorContext('Energetyka')?.keywords).toContain('akcyz');
+    expect(sectorContext('Finanse')?.keywords).toContain('rpp');
+    expect(sectorContext(null)).toBeNull();
+    expect(sectorContext('Sektor którego nie znamy')).toBeNull();
+  });
+
+  it('rozpoznaje decyzje władz', () => {
+    expect(looksPolicyRelated('Rząd rozważa powrót do regulowanych cen paliw')).toBe(true);
+    expect(looksPolicyRelated('Sejm przyjął ustawę o podatku od nadmiarowych zysków')).toBe(true);
+    expect(looksPolicyRelated('Spółka otworzyła nową stację')).toBe(false);
+  });
+});
+
+describe('polska odmiana nazwy spółki', () => {
+  const orlen = { symbol: 'WSE:PKN', name: 'Orlen S.A.' };
+
+  it('łapie nazwę w przypadkach zależnych', () => {
+    expect(mentionsInstrument('Przecena Orlenu pogrzebała szanse na dobry wynik', orlen)).toBe(true);
+    expect(mentionsInstrument('Inwestorzy kupują akcje Orlenu', orlen)).toBe(true);
+    expect(mentionsInstrument('Rozmowa z prezesem Orlenem', orlen)).toBe(true);
+  });
+
+  it('nie rozciąga dopasowania na obce słowa', () => {
+    expect(mentionsInstrument('Nowy orzeł na godle', orlen)).toBe(false);
   });
 });

@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { aiAnalyses, instruments, newsItems, pricesDaily, realizedGains, transactions } from '../db/schema.js';
 import { addDays, today } from '../lib/dates.js';
-import { headlineImportance, stripPublisher } from '../lib/headlines.js';
+import { headlineImportance, looksPolicyRelated, sectorContext, stripPublisher } from '../lib/headlines.js';
 import { errorMessage } from '../lib/errors.js';
 import { createLogger } from '../lib/logger.js';
 import { checkFeature } from './ai-config.js';
@@ -319,6 +319,11 @@ export interface PriceMoveFacts {
   newsInWindow: number;
   /** Liczba sesji w naszej bazie. Zero oznacza lukę w danych, nie brak obrotu na giełdzie. */
   candleCount: number;
+  /**
+   * Otoczenie sektorowe i regulacyjne — wiadomości nienazywające spółki,
+   * ale dotyczące jej branży albo decyzji władz.
+   */
+  context: { title: string; publishedAt: string; source: string; policy: boolean }[];
   /** Skąd pochodzi zmiana kursu: z zapisanej historii czy z odpytania dostawcy. */
   priceSource: 'baza' | 'dostawca' | null;
 }
@@ -339,12 +344,51 @@ export function mentionsInstrument(title: string, instrument: { symbol: string; 
 
   const needles = [ticker, firstWord].filter((needle) => needle.length >= 3);
 
-  // Granice słowa, żeby „PKO" nie trafiało w „pokoje", a „XTB" tylko jako całość.
-  return needles.some((needle) => new RegExp(`(^|[^a-z0-9])${escapeRegExp(needle)}([^a-z0-9]|$)`, 'i').test(haystack));
+  /*
+   * Granica z lewej strony, żeby „PKO" nie trafiało w „pokoje". Z prawej
+   * dopuszczamy końcówkę fleksyjną: po polsku pisze się „Orlenu", „Orlenem",
+   * „Orlenowi" i bez tego wiadomość o spółce lądowała w otoczeniu branżowym.
+   */
+  return needles.some((needle) =>
+    new RegExp(`(^|[^a-z0-9])${escapeRegExp(needle)}[a-ząćęłńóśźż]{0,3}([^a-z0-9]|$)`, 'i').test(haystack),
+  );
 }
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Wiadomości z otoczenia spółki.
+ *
+ * Bierzemy te, które nie nazywają spółki, ale trafiają w słownik jej branży
+ * albo opisują decyzję władz. Zapowiedź regulowania cen paliw nie wspomina
+ * o Orlenie ani razu, a dla rafinerii bywa ważniejsza niż jej własny komunikat.
+ */
+function sectorHeadlines(
+  rows: { title: string; publishedAt: string; source: string; rawSummary: string | null }[],
+  instrument: { symbol: string; name: string; sector: string | null },
+): { title: string; publishedAt: string; source: string; policy: boolean }[] {
+  const context = sectorContext(instrument.sector);
+
+  return rows
+    .filter((row) => !mentionsInstrument(row.title, instrument))
+    .map((row) => {
+      const text = `${row.title} ${row.rawSummary ?? ''}`.toLowerCase();
+      const branch = context?.keywords.some((word) => text.includes(word)) ?? false;
+      const policy = looksPolicyRelated(row.title, row.rawSummary);
+      return { row, branch, policy };
+    })
+    // Sama decyzja władz bez związku z branżą to szum; sama branża wystarczy.
+    .filter(({ branch, policy }) => branch || (policy && context !== null))
+    .sort((a, b) => Number(b.policy) - Number(a.policy) || (a.row.publishedAt < b.row.publishedAt ? 1 : -1))
+    .slice(0, 8)
+    .map(({ row, policy }) => ({
+      title: row.title,
+      publishedAt: row.publishedAt.slice(0, 10),
+      source: row.source,
+      policy,
+    }));
 }
 
 /** Okna, w których można szukać przyczyn ruchu ceny. */
@@ -410,6 +454,7 @@ export function priceMoveFacts(instrumentId: number, days: MoveWindow = DEFAULT_
     changeBp,
     days,
     headlines,
+    context: sectorHeadlines(recent, instrument),
     newsInWindow: recent.length,
     candleCount: candles.length,
     priceSource: changeBp === null ? null : 'baza',
@@ -429,10 +474,14 @@ Napisz po polsku 4-7 zdań, w tej kolejności:
    że coś było. Jeśli nagłówki układają się w wątek (wyniki, zmiana w zarządzie, dane operacyjne, regulacje,
    sytuacja całej branży), nazwij ten wątek.
 3. Oceń siłę powiązania: czy daty się zgadzają, czy to raczej tło niż wyzwalacz, czy ruch wyprzedził wiadomość.
-4. Podaj, co jeszcze mogło zadziałać, a czego w nagłówkach nie widać — wyniki konkurencji, dane makro,
+4. Przejrzyj otoczenie branżowe i decyzje władz. To osobna lista, na której spółka nie jest wymieniona,
+   a która potrafi tłumaczyć ruch lepiej niż jej własne komunikaty: regulacja cen, zmiana podatku, taryfy,
+   stopy procentowe, ceny surowca, decyzja urzędu. Jeśli coś z tej listy dotyka modelu biznesowego spółki,
+   powiedz wprost którym kanałem — przez marżę, wolumen, koszt finansowania czy wycenę całej branży.
+5. Podaj, co jeszcze mogło zadziałać, a czego w żadnej z list nie widać — wyniki konkurencji, dane makro,
    nastroje na szerokim rynku, przepływy w funduszach, zmiany kursu walut przy spółkach z ekspozycją zagraniczną.
-5. Zakończ tym, co warto sprawdzić dalej: konkretne miejsce (raport bieżący, kalendarz publikacji, dane operacyjne),
-   a nie ogólnik „obserwować sytuację".
+6. Zakończ tym, co warto sprawdzić dalej: konkretne miejsce (raport bieżący, kalendarz publikacji, dane operacyjne,
+   projekt ustawy, komunikat urzędu), a nie ogólnik „obserwować sytuację".
 
 Zasady:
 - Nagłówki dostajesz uszeregowane od najważniejszego. Buduj wyjaśnienie wokół pierwszych z listy —
@@ -474,6 +523,26 @@ export async function explainPriceMove(
   }
 
   /*
+   * Otoczenie branżowe dociągamy tak samo jak wiadomości o spółce. Bez niego
+   * analiza widzi tylko to, co spółka sama ogłosiła, a decyzje dotykające całej
+   * branży bywają ważniejsze.
+   */
+  // Próg, nie zero: dwa przypadkowe trafienia nie zastąpią materiału z branży.
+  if (facts.context.length < 3) {
+    const instrument = db.select().from(instruments).where(eq(instruments.id, instrumentId)).get();
+    const sector = sectorContext(instrument?.sector ?? null);
+    if (sector) {
+      try {
+        const { fetchContextNews } = await import('./news.js');
+        log.info(`Otoczenie „${sector.query}": ${await fetchContextNews(sector.query)} nowych`);
+        facts = priceMoveFacts(instrumentId, days) ?? facts;
+      } catch (err) {
+        log.warn(`Pobranie otoczenia nieudane: ${errorMessage(err)}`);
+      }
+    }
+  }
+
+  /*
    * Zmianę kursu bierzemy wprost od dostawcy, nie z zapisanej historii.
    *
    * Nasza baza jest uzupełniana zadaniem cyklicznym, więc bywa o dzień do dwóch
@@ -511,10 +580,15 @@ export async function explainPriceMove(
       ? `Zmiana kursu przez ${facts.days} dni: NIEZNANA — w lokalnej bazie aplikacji brakuje notowań ` +
         `(mamy ${facts.candleCount} sesji). To luka w danych, a NIE przerwa w obrocie na giełdzie.`
       : `Zmiana kursu przez ${facts.days} dni: ${pct(facts.changeBp)}`,
-    'Nagłówki, od najważniejszego:',
+    'Wiadomości o spółce, od najważniejszej:',
     ...(facts.headlines.length > 0
       ? facts.headlines.map((h) => `- ${h.publishedAt}: ${h.title}${h.summary ? ` — ${h.summary.slice(0, 200)}` : ''}`)
       : ['- brak wiadomości dotyczących tej spółki w tym okresie']),
+    '',
+    'Otoczenie branżowe i decyzje władz (spółka nie jest w nich wymieniona):',
+    ...(facts.context.length > 0
+      ? facts.context.map((h) => `- ${h.publishedAt}${h.policy ? ' [decyzja władz]' : ''}: ${h.title}`)
+      : ['- brak']),
   ].join('\n');
 
   const result = await withModel('priceMoves', facts, MOVE_PROMPT, payload);
