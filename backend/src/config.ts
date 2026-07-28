@@ -92,6 +92,7 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default('claude-haiku-4-5-20251001'),
+  OPENAI_MODEL: z.string().default('gpt-5-mini'),
   AI_NEWS_BATCH_LIMIT: z.coerce.number().int().min(1).max(500).default(25),
 
   TELEGRAM_BOT_TOKEN: z.string().optional(),
@@ -152,6 +153,7 @@ export const config = {
     apiKey: env.ANTHROPIC_API_KEY,
     openAiKey: env.OPENAI_API_KEY,
     model: env.ANTHROPIC_MODEL,
+    openAiModel: env.OPENAI_MODEL,
     batchLimit: env.AI_NEWS_BATCH_LIMIT,
   },
 

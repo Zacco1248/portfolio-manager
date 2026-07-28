@@ -157,8 +157,7 @@ export function getAiSettings(): AiSettings {
 }
 
 export function defaultModelFor(provider: AiProvider): string {
-  if (provider === 'openai') return SUGGESTED_MODELS.openai[0]!.id;
-  return config.ai.model;
+  return provider === 'openai' ? config.ai.openAiModel : config.ai.model;
 }
 
 export interface AiSettingsPatch {
