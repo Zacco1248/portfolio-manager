@@ -84,6 +84,78 @@ export function translateSector(sector: string | undefined | null): string | nul
  */
 const FUND_SECTOR = 'Fundusze (wiele sektorów)';
 
+/**
+ * Giełda → kraj notowania.
+ *
+ * Rynek nie zawsze pokrywa się z ekspozycją — ETF na S&P 500 notowany w Londynie
+ * jest tu „Wielka Brytania" tylko do momentu, aż użytkownik poprawi wpis ręcznie
+ * albo dołoży skład funduszu. Dla akcji pojedynczych spółek trafność jest wysoka,
+ * a bez tego mapowania 100% portfela byłoby „nieprzypisane".
+ */
+const EXCHANGE_COUNTRIES: Record<string, string> = {
+  WSE: 'Polska',
+  GPW: 'Polska',
+  WAR: 'Polska',
+  WA: 'Polska',
+  NYSE: 'USA',
+  NASDAQ: 'USA',
+  NYSEARCA: 'USA',
+  AMEX: 'USA',
+  BATS: 'USA',
+  US: 'USA',
+  LON: 'Wielka Brytania',
+  LSE: 'Wielka Brytania',
+  L: 'Wielka Brytania',
+  XETR: 'Niemcy',
+  ETR: 'Niemcy',
+  GER: 'Niemcy',
+  DE: 'Niemcy',
+  FRA: 'Niemcy',
+  AMS: 'Holandia',
+  AS: 'Holandia',
+  EPA: 'Francja',
+  PA: 'Francja',
+  MIL: 'Włochy',
+  MI: 'Włochy',
+  SWX: 'Szwajcaria',
+  TYO: 'Japonia',
+  T: 'Japonia',
+};
+
+/** Klasy aktywów, dla których sektor i kraj wynikają z samej klasy. */
+const CLASS_DEFAULTS: Partial<Record<AssetClass, { sector: string; country?: string }>> = {
+  bond: { sector: 'Obligacje skarbowe', country: 'Polska' },
+  metal: { sector: 'Metale szlachetne', country: 'Świat' },
+  crypto: { sector: 'Kryptowaluty', country: 'Świat' },
+};
+
+/**
+ * Klasyfikacja wyprowadzona z danych, które już mamy w bazie.
+ *
+ * Odpytywanie dostawcy nie pokrywa wszystkiego: obligacje detaliczne i metale
+ * nie mają tam wpisów, a kraju nie zwraca żaden z używanych endpointów. Bez tej
+ * warstwy wykresy struktury pokazują niemal wyłącznie „nieprzypisane".
+ */
+export function localClassification(instrument: {
+  symbol: string;
+  exchange: string | null;
+  assetClass: string;
+}): { sector: string | null; country: string | null } {
+  const defaults = CLASS_DEFAULTS[instrument.assetClass as AssetClass];
+
+  const codes = [
+    instrument.exchange,
+    instrument.symbol.includes(':') ? instrument.symbol.split(':')[0] : null,
+    instrument.symbol.includes('.') ? instrument.symbol.split('.').pop() ?? null : null,
+  ]
+    .filter((c): c is string => typeof c === 'string' && c.length > 0)
+    .map((c) => c.toUpperCase());
+
+  const country = codes.map((c) => EXCHANGE_COUNTRIES[c]).find(Boolean) ?? defaults?.country ?? null;
+
+  return { sector: defaults?.sector ?? null, country };
+}
+
 export interface Classification {
   assetClass: AssetClass | null;
   sector: string | null;
@@ -147,15 +219,29 @@ export interface ClassifyResult {
  * wtedy, gdy dostawca ma pewną odpowiedź, a sektor wyłącznie gdy jest pusty.
  */
 export async function classifyAll(options: { force?: boolean } = {}): Promise<ClassifyResult> {
-  const rows = db
-    .select()
-    .from(instruments)
-    .all()
-    .filter((row) => row.assetClass !== 'cash' && row.assetClass !== 'bond');
+  const rows = db.select().from(instruments).all();
 
   const result: ClassifyResult = { checked: 0, updated: 0, changes: [] };
 
   for (const row of rows) {
+    if (row.assetClass === 'cash') continue;
+
+    // Najpierw to, co wynika z samej bazy — działa offline i obejmuje
+    // obligacje oraz metale, których dostawca notowań w ogóle nie zna.
+    const local = localClassification(row);
+    const localPatch: Partial<InstrumentRow> = {};
+    if (!row.sector && local.sector) localPatch.sector = local.sector;
+    if (!row.country && local.country) localPatch.country = local.country;
+    if (Object.keys(localPatch).length > 0) {
+      db.update(instruments).set(localPatch).where(eq(instruments.id, row.id)).run();
+      result.updated += 1;
+      Object.assign(row, localPatch);
+    }
+
+    // Dostawca dokłada sektor i typ instrumentu, ale nie ma wpisów dla
+    // obligacji detalicznych — nie ma po co go o nie pytać.
+    if (row.assetClass === 'bond') continue;
+
     const needsSector = !row.sector;
     const needsClass = row.assetClass === 'stock' || options.force === true;
     if (!needsSector && !needsClass) continue;

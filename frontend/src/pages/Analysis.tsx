@@ -14,7 +14,8 @@ import {
 import type { XirrResult } from '@portfolio/shared';
 import { Card, DataTable, EmptyState, ErrorBanner, KpiTile, Spinner, Toast, useToast } from '@/components/ui';
 import { api } from '@/lib/api';
-import { formatDate, formatPercent, toneClass } from '@/lib/format';
+import type { StatsResponse } from '@/lib/api';
+import { formatDate, formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
 import { usePortfolioParam } from '@/state/app';
 
@@ -34,6 +35,7 @@ export function Analysis() {
   const { toast, show, dismiss } = useToast();
 
   const benchmarks = useAsync(() => api.analytics.benchmarks(), []);
+  const stats = useAsync(() => api.analytics.stats(portfolioId), [portfolioId]);
   const analytics = useAsync(
     () => api.analytics.get({ portfolioId, benchmarks: selected.join(',') }),
     [portfolioId, selected.join(',')],
@@ -205,6 +207,9 @@ export function Analysis() {
         )}
       </Card>
 
+      {stats.data && <RiskCard stats={stats.data} />}
+      {stats.data && <ContributionCard contributions={stats.data.contributions} />}
+
       <Card title="Stopa zwrotu per pozycja (XIRR)">
         {positionXirr.length === 0 ? (
           <EmptyState title="Brak danych" description="XIRR wymaga co najmniej dwóch przepływów w różnych dniach." />
@@ -244,6 +249,196 @@ export function Analysis() {
       </Card>
 
       {toast && <Toast message={toast.message} tone={toast.tone} onDismiss={dismiss} />}
+    </div>
+  );
+}
+
+/**
+ * Ryzyko i struktura.
+ *
+ * XIRR mówi ile, ale nie mówi jak — dwa portfele z tym samym wynikiem rocznym
+ * mogą się różnić tym, że jeden po drodze stracił połowę wartości. Te liczby
+ * pokazują drugą stronę wyniku.
+ */
+function RiskCard({ stats }: { stats: StatsResponse }) {
+  const { risk, concentration } = stats;
+  const bp = (value: number | null, digits = 1) => (value === null ? '—' : formatPercent(value, { digits }));
+
+  return (
+    <Card title="Ryzyko i struktura">
+      <div className="grid grid-cols-2 gap-3 p-4 pt-2 lg:grid-cols-4">
+        <StatBox
+          label="Zmienność roczna"
+          value={bp(risk.volatilityBp)}
+          hint={
+            risk.volatilityBp === null
+              ? `Potrzeba ok. 20 dni historii (mamy ${risk.observations})`
+              : 'Odchylenie dziennych zwrotów w skali roku'
+          }
+        />
+        <StatBox
+          label="Największe obsunięcie"
+          value={risk.maxDrawdownBp === null ? '—' : `−${(risk.maxDrawdownBp / 100).toFixed(1)}%`}
+          hint={
+            risk.maxDrawdownFrom
+              ? `${formatDate(risk.maxDrawdownFrom)} → ${formatDate(risk.maxDrawdownTo ?? risk.maxDrawdownFrom)}`
+              : 'Brak obsunięć w historii'
+          }
+        />
+        <StatBox
+          label="Obecnie od szczytu"
+          value={risk.drawdownNowBp === null ? '—' : `−${(risk.drawdownNowBp / 100).toFixed(1)}%`}
+          hint={risk.drawdownNowBp === 0 ? 'Portfel jest na szczycie' : 'Dystans do historycznego maksimum'}
+        />
+        <StatBox
+          label="Dni na plusie"
+          value={
+            risk.positiveDays + risk.negativeDays === 0
+              ? '—'
+              : `${Math.round((risk.positiveDays / (risk.positiveDays + risk.negativeDays)) * 100)}%`
+          }
+          hint={`${risk.positiveDays} wzrostowych, ${risk.negativeDays} spadkowych`}
+        />
+        <StatBox
+          label="Najlepszy miesiąc"
+          value={risk.bestMonth ? formatPercent(risk.bestMonth.changeBp, { sign: true }) : '—'}
+          hint={risk.bestMonth?.month ?? 'Za krótka historia'}
+          tone={risk.bestMonth ? toneClass(risk.bestMonth.changeBp) : undefined}
+        />
+        <StatBox
+          label="Najgorszy miesiąc"
+          value={risk.worstMonth ? formatPercent(risk.worstMonth.changeBp, { sign: true }) : '—'}
+          hint={risk.worstMonth?.month ?? 'Za krótka historia'}
+          tone={risk.worstMonth ? toneClass(risk.worstMonth.changeBp) : undefined}
+        />
+        <StatBox
+          label="Koncentracja (HHI)"
+          value={concentration.hhi === 0 ? '—' : String(concentration.hhi)}
+          hint={hhiLabel(concentration.hhi)}
+        />
+        <StatBox
+          label="Trzy największe"
+          value={formatPercent(concentration.top3ShareBp, { digits: 0 })}
+          hint={`${concentration.positionCount} pozycji w portfelu`}
+        />
+      </div>
+
+      {concentration.largest.length > 0 && (
+        <div className="border-t border-surface-border px-4 py-3">
+          <div className="text-2xs uppercase tracking-wide text-content-muted">Największe pozycje</div>
+          <ul className="mt-2 space-y-1.5">
+            {concentration.largest.map((entry) => (
+              <li key={entry.symbol} className="flex items-center gap-3 text-2xs">
+                <span className="w-28 shrink-0 truncate font-medium">{entry.symbol}</span>
+                <span className="h-1.5 flex-1 overflow-hidden rounded bg-surface-overlay">
+                  <span
+                    className="block h-full rounded bg-accent"
+                    style={{ width: `${Math.min(entry.shareBp / 100, 100)}%` }}
+                  />
+                </span>
+                <span className="tabular w-12 shrink-0 text-right text-content-secondary">
+                  {(entry.shareBp / 100).toFixed(1)}%
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <p className="border-t border-surface-border px-4 py-2 text-2xs text-content-muted">{stats.note}</p>
+    </Card>
+  );
+}
+
+/** Opis wskaźnika koncentracji — sama liczba niewiele mówi. */
+function hhiLabel(hhi: number): string {
+  if (hhi === 0) return 'Brak pozycji';
+  if (hhi < 1500) return 'Struktura rozproszona';
+  if (hhi < 2500) return 'Umiarkowana koncentracja';
+  return 'Wysoka koncentracja';
+}
+
+/**
+ * Wkład pozycji w wynik.
+ *
+ * Odpowiada na pytanie, którego nie zadaje XIRR: czy zysk portfela pochodzi
+ * z całej struktury, czy z jednej pozycji, która przykryła resztę.
+ */
+function ContributionCard({ contributions }: { contributions: StatsResponse['contributions'] }) {
+  if (contributions.length === 0) return null;
+
+  const winners = contributions.filter((c) => c.totalPlnMinor > 0).slice(0, 5);
+  const losers = contributions
+    .filter((c) => c.totalPlnMinor < 0)
+    .slice(-5)
+    .reverse();
+
+  return (
+    <Card title="Kto zarobił, kto stracił">
+      <div className="grid gap-0 sm:grid-cols-2">
+        <ContributionList title="Największy wkład" entries={winners} emptyText="Żadna pozycja nie jest na plusie" />
+        <ContributionList
+          title="Największe obciążenie"
+          entries={losers}
+          emptyText="Żadna pozycja nie jest na minusie"
+          bordered
+        />
+      </div>
+      <p className="border-t border-surface-border px-4 py-2 text-2xs text-content-muted">
+        Wynik pozycji to zysk niezrealizowany plus zrealizowany. Udział liczony wobec sumy wartości
+        bezwzględnych, żeby przy wyniku bliskim zera procenty nie wystrzeliły.
+      </p>
+    </Card>
+  );
+}
+
+function ContributionList({
+  title,
+  entries,
+  emptyText,
+  bordered = false,
+}: {
+  title: string;
+  entries: StatsResponse['contributions'];
+  emptyText: string;
+  bordered?: boolean;
+}) {
+  return (
+    <div className={bordered ? 'sm:border-l sm:border-surface-border' : ''}>
+      <div className="px-4 pt-3 text-2xs uppercase tracking-wide text-content-muted">{title}</div>
+      {entries.length === 0 ? (
+        <p className="px-4 py-3 text-2xs text-content-muted">{emptyText}</p>
+      ) : (
+        <ul className="divide-y divide-surface-border">
+          {entries.map((entry) => (
+            <li key={entry.instrumentId} className="flex items-baseline gap-3 px-4 py-2">
+              <Link
+                to={`/instrument/${entry.instrumentId}`}
+                className="min-w-0 flex-1 truncate text-sm hover:text-accent"
+              >
+                <span className="font-medium">{entry.symbol || entry.name}</span>
+                {entry.symbol && <span className="ml-2 text-2xs text-content-muted">{entry.name}</span>}
+              </Link>
+              <span className="tabular shrink-0 text-2xs text-content-muted">
+                {(entry.shareOfResultBp / 100).toFixed(0)}%
+              </span>
+              <span className={`tabular shrink-0 text-sm font-medium ${toneClass(entry.totalPlnMinor)}`}>
+                {formatPln(entry.totalPlnMinor, { sign: true })}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function StatBox({ label, value, hint, tone }: { label: string; value: string; hint: string; tone?: string }) {
+  return (
+    <div className="rounded-lg border border-surface-border bg-surface-overlay/40 px-3 py-2">
+      <div className="text-2xs uppercase tracking-wide text-content-muted">{label}</div>
+      <div className={`mt-0.5 text-base font-semibold tabular ${tone ?? ''}`}>{value}</div>
+      <div className="mt-0.5 text-2xs text-content-muted">{hint}</div>
     </div>
   );
 }

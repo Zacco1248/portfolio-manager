@@ -172,6 +172,19 @@ function cryptoCarry(year: number, taxableIds: number[]): LossCarryForward | nul
   };
 }
 
+/**
+ * Czy instrument jest notowany w Polsce.
+ *
+ * Rozstrzyga o sposobie poboru podatku od dywidendy: krajowy płatnik potrąca
+ * 19% u źródła i sprawa jest zamknięta, zagraniczny potrąca stawkę traktatową,
+ * a różnicę do 19% dopłaca się w PIT-38.
+ */
+function isDomestic(instrument: { symbol: string; country: string | null } | undefined): boolean {
+  if (!instrument) return false;
+  if (instrument.country === 'Polska') return true;
+  return instrument.symbol.endsWith('.WA') || instrument.symbol.startsWith('WSE:');
+}
+
 function buildDividends(
   year: number,
   portfolioIds: number[],
@@ -214,8 +227,20 @@ function buildDividends(
 
     if (row.type === 'dividend') {
       // Kwota brutto po kursie NBP D-1 — bez odjęcia podatku u źródła.
-      const grossPln = Math.round((row.grossMinor * row.fxRateE6) / 1_000_000);
-      const whtPln = Math.round((row.taxMinor * row.fxRateE6) / 1_000_000);
+      let grossPln = Math.round((row.grossMinor * row.fxRateE6) / 1_000_000);
+      let whtPln = Math.round((row.taxMinor * row.fxRateE6) / 1_000_000);
+
+      /*
+       * Dywidendę ze spółki notowanej w Polsce płatnik wypłaca już po potrąceniu
+       * 19% — broker raportuje kwotę netto i nie pokazuje osobnego wiersza podatku.
+       * Bez ubruttowienia policzylibyśmy podatek drugi raz, od kwoty już opodatkowanej.
+       */
+      if (whtPln === 0 && isDomestic(instrument)) {
+        const grossedUp = Math.round((grossPln * 10_000) / (10_000 - CAPITAL_GAINS_TAX_BP));
+        whtPln = grossedUp - grossPln;
+        grossPln = grossedUp;
+      }
+
       gross += grossPln;
       withholding += whtPln;
 
@@ -286,8 +311,14 @@ function emptyReport(year: number, excluded: TaxReport['excludedPortfolios']): T
 /** Lata, dla których są jakiekolwiek zrealizowane transakcje. */
 export function availableTaxYears(): number[] {
   const years = new Set(db.select().from(realizedGains).all().map((r) => r.year));
+
+  // Rok, w którym coś sprzedano albo wpłynęła dywidenda, wypada pokazać nawet
+  // gdy zestawienie wyjdzie zerowe — inaczej brak roku na liście wygląda jak
+  // zgubione dane, a nie jak „nie było czego rozliczać".
   for (const row of db.select().from(transactions).all()) {
-    if (row.type === 'dividend') years.add(Number(row.tradeDate.slice(0, 4)));
+    if (row.type === 'dividend' || row.type === 'sell' || row.type === 'tax') {
+      years.add(Number(row.tradeDate.slice(0, 4)));
+    }
   }
   return [...years].sort((a, b) => b - a);
 }

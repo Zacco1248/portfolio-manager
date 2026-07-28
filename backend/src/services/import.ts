@@ -307,6 +307,11 @@ export async function commitImport(batchId: number, acceptedRowIds: string[]): P
     for (const warning of warnings.slice(0, 20)) errors.push({ rowId: '-', message: warning });
   }
 
+  // Po zapisaniu transakcji uzupełniamy metadane i historię notowań w tle.
+  // Bez tego świeżo zaimportowane instrumenty nie mają sektora, kraju ani
+  // wykresu, a użytkownik musi pamiętać o dwóch dodatkowych przyciskach.
+  void enrichAfterImport();
+
   log.info(`Import #${batchId}: zapisano ${imported}, pominięto ${skipped}, błędów ${errors.length}`);
   return { batchId, imported, skipped, errors };
 }
@@ -352,5 +357,28 @@ function attachBondTerms(rows: PreparedImportRow[], bonds: ParsedBond[]): void {
       })
       .where(eq(instruments.id, item.instrumentId))
       .run();
+  }
+}
+
+
+/**
+ * Uzupełnienie danych po imporcie: klasa aktywów, sektor, kraj i historia
+ * notowań. Uruchamiane w tle — import nie ma na to czekać, bo obie operacje
+ * odpytują zewnętrzne API i trwają dziesiątki sekund.
+ */
+async function enrichAfterImport(): Promise<void> {
+  try {
+    const { classifyAll } = await import('./classify.js');
+    const result = await classifyAll();
+    log.info(`Po imporcie uzupełniono metadane ${result.updated} instrumentów`);
+  } catch (err) {
+    log.warn(`Klasyfikacja po imporcie nieudana: ${errorMessage(err)}`);
+  }
+
+  try {
+    const { backfillAllHistory } = await import('./prices.js');
+    log.info(`Po imporcie: ${await backfillAllHistory()}`);
+  } catch (err) {
+    log.warn(`Uzupełnianie historii po imporcie nieudane: ${errorMessage(err)}`);
   }
 }

@@ -138,6 +138,7 @@ export const api = {
     dashboard: (portfolioId?: number) => get<DashboardResponse>(`/analytics/dashboard${query({ portfolioId })}`),
     get: (params: { portfolioId?: number; from?: string; benchmarks?: string }) =>
       get<AnalyticsResponse>(`/analytics${query(params)}`),
+    stats: (portfolioId?: number) => get<StatsResponse>(`/analytics/stats${query({ portfolioId })}`),
     benchmarks: () => get<{ key: string; label: string; symbol: string }[]>('/analytics/benchmarks'),
     refreshBenchmarks: () => post<{ ok: boolean; message: string }>('/analytics/benchmarks/refresh'),
     technical: (instrumentId: number) =>
@@ -320,3 +321,35 @@ export const api = {
     transactionsCsv: '/api/export/transactions.csv',
   },
 };
+
+/** Miary ryzyka i struktury — odpowiada `/analytics/stats`. */
+export interface StatsResponse {
+  risk: {
+    volatilityBp: number | null;
+    maxDrawdownBp: number | null;
+    maxDrawdownFrom: string | null;
+    maxDrawdownTo: string | null;
+    drawdownNowBp: number | null;
+    bestMonth: { month: string; changeBp: number } | null;
+    worstMonth: { month: string; changeBp: number } | null;
+    positiveDays: number;
+    negativeDays: number;
+    observations: number;
+  };
+  concentration: {
+    hhi: number;
+    top3ShareBp: number;
+    largest: { symbol: string; name: string; shareBp: number }[];
+    positionCount: number;
+  };
+  contributions: {
+    instrumentId: number;
+    symbol: string;
+    name: string;
+    unrealizedPlnMinor: number;
+    realizedPlnMinor: number;
+    totalPlnMinor: number;
+    shareOfResultBp: number;
+  }[];
+  note: string;
+}

@@ -16,6 +16,7 @@ import {
   refreshAllBenchmarks,
 } from '../services/analytics.js';
 import { buildDashboard } from '../services/dashboard.js';
+import { buildStats } from '../services/stats.js';
 import { upcomingDividends } from '../services/corporate-actions.js';
 import { activePortfolioIds, buildPositions, toInstrumentDto } from '../services/positions.js';
 import { computeIndicators, currentState, detectSignals } from '../services/technical.js';
@@ -51,6 +52,12 @@ analyticsRouter.get('/', (req, res, next) => {
   res.json(
     buildAnalytics(activePortfolioIds(parsed.data.portfolioId), parsed.data.from, parsed.data.to, keys),
   );
+});
+
+analyticsRouter.get('/stats', (req, res, next) => {
+  const parsed = portfolioQuery.safeParse(req.query);
+  if (!parsed.success) return next(parsed.error);
+  res.json(buildStats(parsed.data.portfolioId));
 });
 
 analyticsRouter.get('/benchmarks', (_req, res) => {

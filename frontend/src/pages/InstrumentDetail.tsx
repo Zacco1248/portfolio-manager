@@ -74,6 +74,8 @@ export function InstrumentDetail() {
         </button>
       </header>
 
+      <ClassificationCard instrument={instrument} onSaved={reload} />
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile label="RSI (14)" value={state.rsi === null ? '—' : state.rsi.toFixed(1)} tone={rsiTone(state.rsiZone)} />
         <StatTile
@@ -196,6 +198,136 @@ export function InstrumentDetail() {
     </div>
   );
 }
+
+/**
+ * Ręczna korekta klasyfikacji.
+ *
+ * Automat rozpoznaje sektor i kraj tylko dla instrumentów, które ma w bazie
+ * dostawca notowań — obligacje, metale i część ETF-ów zostają nieprzypisane
+ * i psują wykresy struktury. Tu można je uzupełnić raz a dobrze;
+ * ponowna klasyfikacja nie nadpisuje wartości wpisanych ręcznie.
+ */
+function ClassificationCard({
+  instrument,
+  onSaved,
+}: {
+  instrument: { id: number; sector: string | null; country: string | null; assetClass: string };
+  onSaved: () => void;
+}) {
+  const [sector, setSector] = useState(instrument.sector ?? '');
+  const [country, setCountry] = useState(instrument.country ?? '');
+  const [assetClass, setAssetClass] = useState(instrument.assetClass);
+  const [status, setStatus] = useState<string | null>(null);
+
+  const dirty =
+    sector !== (instrument.sector ?? '') ||
+    country !== (instrument.country ?? '') ||
+    assetClass !== instrument.assetClass;
+
+  const save = async () => {
+    setStatus(null);
+    try {
+      await api.instruments.update(instrument.id, {
+        sector: sector.trim() || null,
+        country: country.trim() || null,
+        assetClass,
+      });
+      setStatus('Zapisano');
+      onSaved();
+    } catch {
+      setStatus('Nie udało się zapisać');
+    }
+  };
+
+  return (
+    <Card title="Klasyfikacja">
+      <div className="flex flex-wrap items-end gap-3 p-4 pt-2">
+        <label className="flex-1 min-w-[10rem] text-2xs text-content-muted">
+          Klasa aktywów
+          <select className="input mt-1" value={assetClass} onChange={(e) => setAssetClass(e.target.value)}>
+            {Object.entries(ASSET_CLASS_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex-1 min-w-[10rem] text-2xs text-content-muted">
+          Sektor
+          <input
+            className="input mt-1"
+            value={sector}
+            onChange={(e) => setSector(e.target.value)}
+            list="sector-options"
+            placeholder="np. Technologia"
+          />
+        </label>
+        <label className="flex-1 min-w-[10rem] text-2xs text-content-muted">
+          Kraj / region
+          <input
+            className="input mt-1"
+            value={country}
+            onChange={(e) => setCountry(e.target.value)}
+            list="country-options"
+            placeholder="np. Polska"
+          />
+        </label>
+        <button type="button" className="btn btn-primary" disabled={!dirty} onClick={() => void save()}>
+          Zapisz
+        </button>
+        {status && <span className="text-2xs text-content-muted">{status}</span>}
+      </div>
+
+      <datalist id="sector-options">
+        {SECTOR_HINTS.map((value) => (
+          <option key={value} value={value} />
+        ))}
+      </datalist>
+      <datalist id="country-options">
+        {COUNTRY_HINTS.map((value) => (
+          <option key={value} value={value} />
+        ))}
+      </datalist>
+
+      <p className="border-t border-surface-border px-4 py-2 text-2xs text-content-muted">
+        Wartości wpisane ręcznie mają pierwszeństwo — automatyczna klasyfikacja ich nie nadpisze.
+        Fundusz szeroko zdywersyfikowany opisz sektorem „Fundusz mieszany" i regionem, w który inwestuje.
+      </p>
+    </Card>
+  );
+}
+
+/** Podpowiedzi zgodne z nazewnictwem używanym przez automat. */
+const SECTOR_HINTS = [
+  'Technologia',
+  'Finanse',
+  'Ochrona zdrowia',
+  'Przemysł',
+  'Energia',
+  'Surowce',
+  'Dobra konsumpcyjne',
+  'Dobra podstawowe',
+  'Nieruchomości',
+  'Usługi komunalne',
+  'Telekomunikacja',
+  'Fundusz mieszany',
+  'Obligacje skarbowe',
+  'Metale szlachetne',
+  'Kryptowaluty',
+];
+
+const COUNTRY_HINTS = [
+  'Polska',
+  'USA',
+  'Rynki rozwinięte',
+  'Rynki wschodzące',
+  'Europa',
+  'Niemcy',
+  'Wielka Brytania',
+  'Japonia',
+  'Chiny',
+  'Świat',
+];
 
 function StatTile({ label, value, tone }: { label: string; value: string; tone: 'gain' | 'loss' | 'warn' | 'neutral' }) {
   const toneClass =

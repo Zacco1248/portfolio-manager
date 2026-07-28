@@ -4,7 +4,7 @@ import type { BondHolding, BondKind, BondPeriod } from '@portfolio/shared';
 import { INFLATION_INDEXED_BONDS } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
-import { bondHoldings, cpiRates } from '../db/schema.js';
+import { bondHoldings, cpiRates, instruments, transactions } from '../db/schema.js';
 import { addMonths, addYears, daysBetween, minDate, today } from '../lib/dates.js';
 import type { IsoDate } from '../lib/dates.js';
 
@@ -165,10 +165,94 @@ export function valueBond(params: BondParams, asOf?: IsoDate): BondValuation {
   };
 }
 
+/**
+ * Obligacje zaimportowane jako transakcje.
+ *
+ * Import nie tworzy dla nich osobnej pozycji obligacyjnej — zakup jest już
+ * w transakcjach, a druga reprezentacja podwoiłaby wartość portfela. Warunki
+ * emisji siedzą na instrumencie, więc na potrzeby tego widoku odtwarzamy
+ * z nich wpisy obligacyjne.
+ */
+function importedBonds(portfolioId?: number): BondHolding[] {
+  const rows = db
+    .select()
+    .from(instruments)
+    .all()
+    .filter((i) => i.assetClass === 'bond' && i.meta && typeof (i.meta as Record<string, unknown>).bondKind === 'string');
+
+  const out: BondHolding[] = [];
+
+  for (const instrument of rows) {
+    const meta = instrument.meta as Record<string, unknown>;
+    const kind = String(meta.bondKind).toUpperCase() as BondKind;
+    const purchaseDate = String(meta.purchaseDate ?? '');
+    const rate = Number(meta.firstYearRatePercent ?? 0);
+    if (!purchaseDate || !Number.isFinite(rate) || rate <= 0) continue;
+
+    // Liczba sztuk wynika z transakcji kupna tego instrumentu.
+    const buys = db
+      .select()
+      .from(transactions)
+      .where(eq(transactions.instrumentId, instrument.id))
+      .all()
+      .filter((t) => portfolioId === undefined || t.portfolioId === portfolioId);
+
+    const count = Math.round(
+      buys.reduce((sum, t) => sum + (t.type === 'buy' ? t.qtyE8 : t.type === 'sell' ? -t.qtyE8 : 0), 0) / 100_000_000,
+    );
+    if (count <= 0) continue;
+
+    const params: BondParams = {
+      kind,
+      purchaseDate,
+      count,
+      nominalMinor: 10_000,
+      firstYearRateBp: Math.round(rate * 100),
+      marginBp: Math.round(Number(meta.marginPercent ?? 0) * 100),
+      termMonths: TERM_MONTHS[kind] ?? 120,
+      capitalization: 'annual',
+    };
+    const valuation = valueBond(params);
+
+    out.push({
+      id: -instrument.id,
+      portfolioId: buys[0]?.portfolioId ?? 0,
+      series: instrument.symbol,
+      kind,
+      purchaseDate,
+      count,
+      nominalMinor: params.nominalMinor,
+      firstYearRateBp: params.firstYearRateBp,
+      marginBp: params.marginBp,
+      termMonths: params.termMonths,
+      maturityDate: addMonths(purchaseDate, params.termMonths),
+      capitalization: 'annual',
+      currentValueMinor: valuation.currentValueMinor,
+      accruedInterestMinor: valuation.accruedInterestMinor,
+      currentPeriodRateBp: valuation.currentPeriodRateBp,
+      periods: valuation.periods,
+    });
+  }
+
+  return out;
+}
+
+/** Miesiące trwania emisji wg rodzaju obligacji detalicznej. */
+const TERM_MONTHS: Record<string, number> = {
+  EDO: 120,
+  COI: 48,
+  TOS: 36,
+  ROR: 12,
+  DOR: 24,
+  ROS: 72,
+  ROD: 144,
+  OTS: 3,
+};
+
 export function listBonds(portfolioId?: number): BondHolding[] {
   const rows = db.select().from(bondHoldings).all();
 
-  return rows
+  const manual = rows
     .filter((r) => portfolioId === undefined || r.portfolioId === portfolioId)
     .map((row) => {
       const params: BondParams = {
@@ -202,6 +286,8 @@ export function listBonds(portfolioId?: number): BondHolding[] {
         periods: valuation.periods,
       };
     });
+
+  return [...manual, ...importedBonds(portfolioId)];
 }
 
 export function createBond(input: {
