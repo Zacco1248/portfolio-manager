@@ -9,6 +9,7 @@ import type { InstrumentRow } from '../db/schema.js';
 import { nowIso } from '../lib/dates.js';
 import { errorMessage } from '../lib/errors.js';
 import { fetchText } from '../lib/http-client.js';
+import { looksMarketRelated, stripPublisher } from '../lib/headlines.js';
 import { parseFeed } from '../lib/rss.js';
 import type { FeedEntry } from '../lib/rss.js';
 import { createLogger } from '../lib/logger.js';
@@ -165,10 +166,23 @@ export async function fetchNewsFor(targets: InstrumentRow[]): Promise<string> {
           feedCache.set(url, entries);
         }
 
-        // Kanały zbiorcze (Bankier, Puls Biznesu) filtrujemy po nazwie spółki,
-        // inaczej każda spółka dostałaby wszystkie wiadomości z rynku.
-        const isAggregate = source.id !== 'yahoo' && source.id !== 'google-news';
-        const relevant = isAggregate ? entries.filter((e) => mentionsInstrument(e, instrument)) : entries;
+        /*
+         * Kanały zbiorcze (Bankier, Puls Biznesu) filtrujemy po nazwie spółki,
+         * inaczej każda spółka dostałaby wszystkie wiadomości z rynku.
+         *
+         * Kanał kierowany też wymaga sprawdzenia, choć zapytanie zawiera nazwę:
+         * dopasowanie potrafi wpaść w nazwę wydawcy zamiast w treść. Tam badamy
+         * sam tytuł bez wydawcy — zajawka niosłaby tę samą pułapkę.
+         */
+        const relevant =
+          source.id === 'yahoo'
+            ? entries
+            : entries.filter((e) =>
+                source.id === 'google-news'
+                  ? mentionsInstrument({ ...e, title: stripPublisher(e.title), summary: null }, instrument) &&
+                    looksMarketRelated(stripPublisher(e.title))
+                  : mentionsInstrument(e, instrument),
+              );
 
         for (const entry of relevant.slice(0, 15)) {
           const result = db

@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { aiAnalyses, instruments, newsItems, pricesDaily, realizedGains, transactions } from '../db/schema.js';
 import { addDays, today } from '../lib/dates.js';
+import { stripPublisher } from '../lib/headlines.js';
 import { errorMessage } from '../lib/errors.js';
 import { createLogger } from '../lib/logger.js';
 import { checkFeature } from './ai-config.js';
@@ -320,7 +321,7 @@ export interface PriceMoveFacts {
  * trafienia w środku innych słów.
  */
 export function mentionsInstrument(title: string, instrument: { symbol: string; name: string }): boolean {
-  const haystack = title.toLowerCase();
+  const haystack = stripPublisher(title).toLowerCase();
 
   const ticker = (instrument.symbol.split(':').pop() ?? instrument.symbol).split('.')[0]!.toLowerCase();
   const firstWord = instrument.name.split(/[\s,.]+/)[0]?.toLowerCase() ?? '';
