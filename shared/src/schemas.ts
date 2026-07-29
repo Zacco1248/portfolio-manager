@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  ACCOUNT_KINDS,
   ALERT_KINDS,
   ALLOCATION_DIMENSIONS,
   ASSET_CLASSES,
@@ -50,6 +51,19 @@ export const portfolioUpdateSchema = portfolioCreateSchema.partial().extend({
   archived: z.boolean().optional(),
 });
 
+// ── Konta ────────────────────────────────────────────────────
+export const accountCreateSchema = z.object({
+  name: z.string().trim().min(1, 'Nazwa jest wymagana').max(80),
+  kind: z.enum(ACCOUNT_KINDS).default('broker'),
+  institution: z.string().trim().max(80).optional(),
+  currency: currencyCode.default('PLN'),
+  note: z.string().trim().max(500).optional(),
+});
+
+export const accountUpdateSchema = accountCreateSchema.partial().extend({
+  archived: z.boolean().optional(),
+});
+
 // ── Instrumenty ──────────────────────────────────────────────
 export const instrumentCreateSchema = z.object({
   symbol: z.string().trim().min(1).max(40),
@@ -86,6 +100,8 @@ export const transactionCreateSchema = z
   .object({
     portfolioId: idParam,
     instrumentId: idParam.optional(),
+    /** Konto, na którym operacja się odbyła. Opcjonalne — nie każde źródło je podaje. */
+    accountId: idParam.optional(),
     type: z.enum(TRANSACTION_TYPES),
     tradeDate: isoDate,
     settlementDate: isoDate.optional(),
@@ -121,6 +137,12 @@ export const transactionCreateSchema = z
   });
 
 export const transactionUpdateSchema = z.object({
+  /**
+   * Jedyne pole tożsamościowe, które wolno zmienić po zapisie. Konto nie wchodzi
+   * ani do klucza FIFO, ani do dedupe — jego korekta nie rusza rozliczenia
+   * podatkowego. Portfela, instrumentu i typu zmienić się nie da.
+   */
+  accountId: idParam.nullable().optional(),
   tradeDate: isoDate.optional(),
   quantity: decimalInput.optional(),
   price: decimalInput.optional(),
@@ -135,6 +157,7 @@ export const transactionUpdateSchema = z.object({
 export const transactionQuerySchema = z.object({
   portfolioId: idParam.optional(),
   instrumentId: idParam.optional(),
+  accountId: idParam.optional(),
   type: z.enum(TRANSACTION_TYPES).optional(),
   from: isoDate.optional(),
   to: isoDate.optional(),
@@ -237,6 +260,8 @@ export const technicalQuerySchema = z.object({
 export type LoginInput = z.infer<typeof loginSchema>;
 export type PortfolioCreateInput = z.infer<typeof portfolioCreateSchema>;
 export type PortfolioUpdateInput = z.infer<typeof portfolioUpdateSchema>;
+export type AccountCreateInput = z.infer<typeof accountCreateSchema>;
+export type AccountUpdateInput = z.infer<typeof accountUpdateSchema>;
 export type InstrumentCreateInput = z.infer<typeof instrumentCreateSchema>;
 export type TransactionCreateInput = z.infer<typeof transactionCreateSchema>;
 export type TransactionUpdateInput = z.infer<typeof transactionUpdateSchema>;

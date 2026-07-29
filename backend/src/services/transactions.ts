@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, lte } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import {
   convertMinor,
@@ -11,11 +11,11 @@ import {
 } from '@portfolio/shared';
 import type { AssetClass, TransactionCreateInput, TransactionType } from '@portfolio/shared';
 import { db } from '../db/index.js';
-import { instruments, portfolios, realizedGains, transactions } from '../db/schema.js';
-import type { TransactionRow } from '../db/schema.js';
+import { accounts, deletedTransactions, instruments, portfolios, realizedGains, transactions } from '../db/schema.js';
+import type { DeletedTransactionRow, TransactionRow } from '../db/schema.js';
 import { config } from '../config.js';
 import { nowIso } from '../lib/dates.js';
-import { badRequest, notFound } from '../lib/errors.js';
+import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { createLogger } from '../lib/logger.js';
 import { computeFifo, groupForFifo, parseGroupKey } from './fifo.js';
 import type { FifoTransaction } from './fifo.js';
@@ -43,6 +43,7 @@ const CASH_SIGN: Record<TransactionType, -1 | 1> = {
 export interface PreparedTransaction {
   portfolioId: number;
   instrumentId: number | null;
+  accountId: number | null;
   type: TransactionType;
   tradeDate: string;
   settlementDate: string | null;
@@ -100,6 +101,7 @@ export async function prepareTransaction(
   return {
     portfolioId: input.portfolioId,
     instrumentId: input.instrumentId ?? null,
+    accountId: input.accountId ?? null,
     type: input.type,
     tradeDate: input.tradeDate,
     settlementDate: input.settlementDate ?? null,
@@ -175,6 +177,13 @@ async function resolveTaxFx(
   }
 }
 
+/**
+ * Klucz logiczny do wykrywania duplikatów między źródłami.
+ *
+ * Konto świadomie nie wchodzi do klucza: ta sama operacja opisana raz
+ * z kontem, a raz bez (bo drugie źródło go nie podaje) to nadal jedna
+ * operacja. Dopisanie konta osłabiłoby wykrywanie duplikatów.
+ */
 export function buildDedupeKey(tx: {
   portfolioId: number;
   instrumentId: number | null;
@@ -211,6 +220,11 @@ export async function createTransaction(
     if (!instrument) throw notFound('Nie ma takiego instrumentu');
   }
 
+  if (input.accountId !== undefined && input.accountId !== null) {
+    const account = db.select().from(accounts).where(eq(accounts.id, input.accountId)).get();
+    if (!account) throw notFound('Nie ma takiego konta');
+  }
+
   const prepared = await prepareTransaction(input);
 
   const row = db
@@ -237,6 +251,12 @@ export async function updateTransaction(
   const merged = {
     portfolioId: current.portfolioId,
     instrumentId: current.instrumentId ?? undefined,
+    // Konto wolno zmienić — nie wchodzi ani do FIFO, ani do dedupe.
+    // `null` w patchu znaczy „odepnij", brak klucza znaczy „zostaw".
+    accountId:
+      patch.accountId !== undefined
+        ? ((patch.accountId as number | null) ?? undefined)
+        : (current.accountId ?? undefined),
     type: current.type as TransactionType,
     tradeDate: (patch.tradeDate as string) ?? current.tradeDate,
     settlementDate: current.settlementDate ?? undefined,
@@ -290,11 +310,90 @@ function formatFromE8(value: number, decimals: number): string {
   return `${negative ? '-' : ''}${int}${frac}`;
 }
 
+/**
+ * Usuwa transakcję, zachowując jej kopię w koszu.
+ *
+ * Wiersz znika z `transactions`, więc żaden odczyt liczący pieniądze nie musi
+ * go pomijać — pełna treść ląduje w `deleted_transactions` i da się ją cofnąć.
+ */
 export function deleteTransaction(id: number): string[] {
   const current = db.select().from(transactions).where(eq(transactions.id, id)).get();
   if (!current) throw notFound('Nie ma takiej transakcji');
-  db.delete(transactions).where(eq(transactions.id, id)).run();
+
+  db.transaction((tx) => {
+    tx.insert(deletedTransactions)
+      .values({
+        transactionId: current.id,
+        portfolioId: current.portfolioId,
+        instrumentId: current.instrumentId,
+        accountId: current.accountId,
+        type: current.type,
+        tradeDate: current.tradeDate,
+        amountPlnMinor: current.amountPlnMinor,
+        payload: current as unknown as Record<string, unknown>,
+      })
+      .run();
+    tx.delete(transactions).where(eq(transactions.id, id)).run();
+  });
+
   return recomputeRealizedGains(current.portfolioId, current.instrumentId);
+}
+
+export interface RestoreResult {
+  transaction: TransactionRow;
+  warnings: string[];
+}
+
+/**
+ * Przywraca transakcję z kosza.
+ *
+ * Wiersz wraca z oryginalną treścią, ale nowym identyfikatorem — stary mógł
+ * w międzyczasie zostać nadany innej transakcji. Nie ma to znaczenia dla
+ * rozliczeń: `realized_gains` jest cache'em liczonym od zera.
+ */
+export function restoreTransaction(id: number): RestoreResult {
+  const entry = db.select().from(deletedTransactions).where(eq(deletedTransactions.id, id)).get();
+  if (!entry) throw notFound('Nie ma takiego wpisu w koszu');
+
+  const payload = entry.payload as Record<string, unknown>;
+  const { id: _oldId, ...values } = payload;
+
+  /*
+   * `row_hash` jest unikalny globalnie. Jeśli po usunięciu ten sam wiersz
+   * wrócił przez ponowny import, przywrócenie utworzyłoby duplikat —
+   * odmawiamy i mówimy wprost, co się stało.
+   */
+  const rowHash = values.rowHash as string | null | undefined;
+  if (rowHash) {
+    const clash = db.select().from(transactions).where(eq(transactions.rowHash, rowHash)).get();
+    if (clash) {
+      throw conflict(
+        'Ta transakcja została w międzyczasie wgrana ponownie przez import — nie ma czego przywracać.',
+      );
+    }
+  }
+
+  const restored = db.transaction((tx) => {
+    const row = tx
+      .insert(transactions)
+      .values(values as typeof transactions.$inferInsert)
+      .returning()
+      .get();
+    tx.delete(deletedTransactions).where(eq(deletedTransactions.id, id)).run();
+    return row;
+  });
+
+  return { transaction: restored, warnings: recomputeRealizedGains(restored.portfolioId, restored.instrumentId) };
+}
+
+/** Zawartość kosza, od najświeżej usuniętych. */
+export function listDeletedTransactions(limit = 50): DeletedTransactionRow[] {
+  return db.select().from(deletedTransactions).orderBy(desc(deletedTransactions.deletedAt)).limit(limit).all();
+}
+
+/** Trwałe usunięcie wpisu z kosza — bez możliwości odzyskania. */
+export function purgeDeletedTransaction(id: number): void {
+  db.delete(deletedTransactions).where(eq(deletedTransactions.id, id)).run();
 }
 
 /**
@@ -390,6 +489,7 @@ export function recomputeAll(): string[] {
 export interface TransactionFilters {
   portfolioId?: number;
   instrumentId?: number;
+  accountId?: number;
   type?: TransactionType;
   from?: string;
   to?: string;
@@ -401,6 +501,7 @@ export function listTransactions(filters: TransactionFilters): TransactionRow[] 
   const conditions: SQL[] = [];
   if (filters.portfolioId) conditions.push(eq(transactions.portfolioId, filters.portfolioId));
   if (filters.instrumentId) conditions.push(eq(transactions.instrumentId, filters.instrumentId));
+  if (filters.accountId) conditions.push(eq(transactions.accountId, filters.accountId));
   if (filters.type) conditions.push(eq(transactions.type, filters.type));
   if (filters.from) conditions.push(gte(transactions.tradeDate, filters.from));
   if (filters.to) conditions.push(lte(transactions.tradeDate, filters.to));

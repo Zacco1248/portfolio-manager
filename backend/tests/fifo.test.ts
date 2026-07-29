@@ -15,7 +15,7 @@ function tx(partial: Partial<FifoTransaction> & Pick<FifoTransaction, 'id' | 'ty
   };
 }
 
-const stocks = { assetClass: 'stock' as const, taxExempt: false };
+const stocks = { assetClass: 'stock_pl' as const, taxExempt: false };
 
 describe('FIFO — podstawy', () => {
   it('rozlicza sprzedaż całej pozycji z jednego lotu', () => {
@@ -273,7 +273,7 @@ describe('FIFO — przypadki brzegowe', () => {
         tx({ id: 1, type: 'buy', tradeDate: '2025-01-10', qtyE8: 1 * E8, amountPlnMinor: -100_00 }),
         tx({ id: 2, type: 'sell', tradeDate: '2025-06-10', qtyE8: 1 * E8, amountPlnMinor: 150_00 }),
       ],
-      { assetClass: 'stock', taxExempt: true },
+      { assetClass: 'stock_pl', taxExempt: true },
     );
 
     expect(result.gains[0]?.taxExempt).toBe(true);

@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { ALERT_KIND_LABELS, TAX_REGIMES, TAX_REGIME_LABELS } from '@portfolio/shared';
-import type { AlertKind, TaxRegime } from '@portfolio/shared';
+import { ACCOUNT_KIND_LABELS, ACCOUNT_KINDS, ALERT_KIND_LABELS, rollUp, TAX_REGIMES, TAX_REGIME_LABELS } from '@portfolio/shared';
+import type { AccountKind, AlertKind, TaxRegime } from '@portfolio/shared';
 import { Card, DataTable, ErrorBanner, Field, Spinner, Toast, useToast } from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
 import { formatDate, formatDateTime, formatPln, relativeTime } from '@/lib/format';
@@ -135,6 +135,8 @@ export function Settings() {
           Portfel oznaczony jako poduszka jest pomijany w propozycjach rebalansu.
         </p>
       </Card>
+
+      <AccountsCard onMessage={show} />
 
       <AiSettingsCard onMessage={show} />
 
@@ -356,7 +358,7 @@ function EtfHoldingsEditor({ onMessage }: { onMessage: (message: string, tone: '
     [selected],
   );
 
-  const etfs = (instruments.data ?? []).filter((i) => i.assetClass === 'etf');
+  const etfs = (instruments.data ?? []).filter((i) => rollUp(i.assetClass) === 'etf');
 
   const save = async () => {
     if (!selected) return;
@@ -446,6 +448,138 @@ function EtfHoldingsEditor({ onMessage }: { onMessage: (message: string, tone: '
 
 
 /**
+ * Konta — miejsca, w których fizycznie leżą aktywa.
+ *
+ * Wymiar niezależny od portfela: ten sam rachunek w XTB może obsługiwać
+ * zwykły portfel i IKE, a jeden portfel może zbierać aktywa z kilku miejsc.
+ * Konto nie wpływa na rozliczenie podatkowe — służy do odpowiedzi na pytanie
+ * „ile mam i ile zarobiłem w danym miejscu".
+ */
+function AccountsCard({ onMessage }: { onMessage: (message: string, tone: 'info' | 'error' | 'success') => void }) {
+  const { accounts, refreshAccounts } = useApp();
+  const [form, setForm] = useState({ name: '', kind: 'broker' as AccountKind, institution: '', currency: 'PLN' });
+  const [busy, setBusy] = useState(false);
+
+  const add = async () => {
+    setBusy(true);
+    try {
+      await api.accounts.create({
+        name: form.name,
+        kind: form.kind,
+        currency: form.currency,
+        ...(form.institution ? { institution: form.institution } : {}),
+      });
+      setForm({ name: '', kind: 'broker', institution: '', currency: 'PLN' });
+      await refreshAccounts();
+      onMessage('Konto dodane', 'success');
+    } catch (err) {
+      onMessage(err instanceof ApiError ? err.message : 'Nie udało się dodać konta', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (id: number, name: string) => {
+    try {
+      await api.accounts.remove(id);
+      await refreshAccounts();
+      onMessage(`Konto „${name}" usunięte`, 'success');
+    } catch (err) {
+      onMessage(err instanceof ApiError ? err.message : 'Nie udało się usunąć konta', 'error');
+    }
+  };
+
+  return (
+    <Card title="Konta">
+      <div className="grid gap-3 p-4 pt-2 sm:grid-cols-5">
+        <Field label="Nazwa">
+          <input
+            className="input"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            placeholder="XTB"
+          />
+        </Field>
+        <Field label="Rodzaj">
+          <select
+            className="input"
+            value={form.kind}
+            onChange={(e) => setForm({ ...form, kind: e.target.value as AccountKind })}
+          >
+            {ACCOUNT_KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {ACCOUNT_KIND_LABELS[kind]}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Instytucja" hint="Gdy nazwa potoczna nie wystarcza">
+          <input
+            className="input"
+            value={form.institution}
+            onChange={(e) => setForm({ ...form, institution: e.target.value })}
+            placeholder="X-Trade Brokers DM SA"
+          />
+        </Field>
+        <Field label="Waluta">
+          <input
+            className="input"
+            value={form.currency}
+            onChange={(e) => setForm({ ...form, currency: e.target.value.toUpperCase().slice(0, 3) })}
+          />
+        </Field>
+        <div className="flex items-end">
+          <button type="button" className="btn btn-primary" onClick={() => void add()} disabled={!form.name || busy}>
+            Dodaj konto
+          </button>
+        </div>
+      </div>
+
+      {accounts.length > 0 && (
+        <DataTable headers={['Nazwa', 'Rodzaj', 'Instytucja', 'Waluta', { label: 'Transakcje', align: 'right' }, '']}>
+          {accounts.map((account) => (
+            <tr key={account.id}>
+              <td className="table-cell font-medium">{account.name}</td>
+              <td className="table-cell text-content-secondary">{ACCOUNT_KIND_LABELS[account.kind]}</td>
+              <td className="table-cell text-content-secondary">{account.institution ?? '—'}</td>
+              <td className="table-cell text-content-secondary">{account.currency}</td>
+              <td className="table-cell tabular text-right text-content-secondary">{account.transactionCount ?? 0}</td>
+              <td className="table-cell text-right">
+                <button
+                  type="button"
+                  className="btn btn-ghost px-2 py-0.5 text-2xs"
+                  onClick={() =>
+                    void api.accounts
+                      .update(account.id, { archived: !account.archived })
+                      .then(refreshAccounts)
+                  }
+                >
+                  {account.archived ? 'Przywróć' : 'Archiwizuj'}
+                </button>
+                {(account.transactionCount ?? 0) === 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost px-2 py-0.5 text-2xs"
+                    onClick={() => void remove(account.id, account.name)}
+                  >
+                    Usuń
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </DataTable>
+      )}
+
+      <p className="px-4 pb-3 text-2xs text-content-muted">
+        Konto mówi, gdzie aktywa fizycznie leżą — niezależnie od portfela, który decyduje o rozliczeniu podatkowym.
+        Rozbicie wyniku na konta zobaczysz na pulpicie. Konta z transakcjami można tylko archiwizować.
+      </p>
+    </Card>
+  );
+}
+
+/**
  * Konfiguracja funkcji AI.
  *
  * Każda funkcja jest osobnym przełącznikiem i przy każdej widać, co dokładnie
@@ -508,6 +642,8 @@ function AiSettingsCard({ onMessage }: { onMessage: (message: string, tone: 'inf
         </div>
       }
     >
+      <ApiKeyFields status={status} onSaved={ai.reload} onMessage={onMessage} />
+
       {test.result && (
         <div
           className={`mx-4 mt-3 rounded-lg border px-3 py-2 text-2xs ${
@@ -748,5 +884,113 @@ function DuplicatesCard({ onMessage }: { onMessage: (message: string, tone: 'inf
         </button>
       </div>
     </Card>
+  );
+}
+
+/**
+ * Pola kluczy API.
+ *
+ * Klucz zapisany tutaj ma pierwszeństwo przed `.env` i działa od razu — plik
+ * jest czytany raz przy starcie procesu, więc wpisanie go tam wymagało
+ * restartu. Do przeglądarki wraca wyłącznie maska; pełnej wartości serwer
+ * nigdy nie odsyła.
+ */
+function ApiKeyFields({
+  status,
+  onSaved,
+  onMessage,
+}: {
+  status: {
+    keys: {
+      anthropic: boolean;
+      openai: boolean;
+      anthropicMasked: string | null;
+      openaiMasked: string | null;
+      anthropicSource: 'settings' | 'env' | null;
+      openaiSource: 'settings' | 'env' | null;
+    };
+  };
+  onSaved: () => void;
+  onMessage: (message: string, tone: 'info' | 'error' | 'success') => void;
+}) {
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const providers = [
+    {
+      id: 'anthropic' as const,
+      label: 'Anthropic (Claude)',
+      placeholder: 'sk-ant-…',
+      present: status.keys.anthropic,
+      masked: status.keys.anthropicMasked,
+      source: status.keys.anthropicSource,
+    },
+    {
+      id: 'openai' as const,
+      label: 'OpenAI',
+      placeholder: 'sk-…',
+      present: status.keys.openai,
+      masked: status.keys.openaiMasked,
+      source: status.keys.openaiSource,
+    },
+  ];
+
+  const save = async (provider: 'anthropic' | 'openai') => {
+    setBusy(provider);
+    try {
+      const result = await api.ai.saveKey(provider, draft[provider] ?? '');
+      setDraft((current) => ({ ...current, [provider]: '' }));
+      onSaved();
+
+      // Test po zapisie: literówka w kluczu inaczej ujawniłaby się dopiero
+      // przy pierwszym użyciu funkcji AI, długo po jej popełnieniu.
+      if (result.test) {
+        onMessage(
+          result.test.ok ? `Połączono — odpowiedź w ${result.test.latencyMs} ms.` : result.test.message,
+          result.test.ok ? 'success' : 'error',
+        );
+      } else {
+        onMessage('Klucz wyczyszczony.', 'info');
+      }
+    } catch (err) {
+      onMessage(err instanceof ApiError ? err.message : 'Nie udało się zapisać klucza', 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="grid gap-3 border-b border-surface-border p-4 sm:grid-cols-2">
+      {providers.map((provider) => (
+        <Field
+          key={provider.id}
+          label={provider.label}
+          hint={
+            provider.present
+              ? `Zapisany: ${provider.masked} (${provider.source === 'env' ? 'z pliku .env' : 'z ustawień'})`
+              : 'Nie ustawiono'
+          }
+        >
+          <div className="flex gap-2">
+            <input
+              type="password"
+              className="input"
+              autoComplete="off"
+              placeholder={provider.present ? '•••••••• (wpisz, aby zmienić)' : provider.placeholder}
+              value={draft[provider.id] ?? ''}
+              onChange={(e) => setDraft((current) => ({ ...current, [provider.id]: e.target.value }))}
+            />
+            <button
+              type="button"
+              className="btn shrink-0"
+              disabled={busy === provider.id}
+              onClick={() => void save(provider.id)}
+            >
+              {busy === provider.id ? '…' : draft[provider.id] ? 'Zapisz' : 'Wyczyść'}
+            </button>
+          </div>
+        </Field>
+      ))}
+    </div>
   );
 }

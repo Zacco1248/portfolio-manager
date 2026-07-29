@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Portfolio, SystemStatus } from '@portfolio/shared';
+import type { Account, Portfolio, SystemStatus } from '@portfolio/shared';
 import { ApiError, api } from '@/lib/api';
 
 /**
@@ -16,6 +16,8 @@ export const ALL_PORTFOLIOS = 0;
 interface AppState {
   authenticated: boolean | null;
   portfolios: Portfolio[];
+  /** Konta są globalne — nie zależą od wybranego portfela. */
+  accounts: Account[];
   selectedPortfolioId: number;
   selectedPortfolio: Portfolio | null;
   status: SystemStatus | null;
@@ -24,6 +26,7 @@ interface AppState {
   logout: () => Promise<void>;
   selectPortfolio: (id: number) => void;
   refreshPortfolios: () => Promise<void>;
+  refreshAccounts: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   toggleTheme: () => void;
 }
@@ -36,6 +39,7 @@ const STORAGE_THEME = 'pm.theme';
 export function AppProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [portfolios, setPortfolios] = useState<Portfolio[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [selectedPortfolioId, setSelectedPortfolioId] = useState<number>(() => {
     const stored = localStorage.getItem(STORAGE_PORTFOLIO);
@@ -59,6 +63,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const refreshAccounts = useCallback(async () => {
+    setAccounts(await api.accounts.list());
+  }, []);
+
   const refreshStatus = useCallback(async () => {
     setStatus(await api.status.get());
   }, []);
@@ -76,8 +84,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!authenticated) return;
     void refreshPortfolios();
+    void refreshAccounts();
     void refreshStatus();
-  }, [authenticated, refreshPortfolios, refreshStatus]);
+  }, [authenticated, refreshPortfolios, refreshAccounts, refreshStatus]);
 
   const login = useCallback(async (password: string) => {
     await api.auth.login(password);
@@ -88,6 +97,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await api.auth.logout().catch(() => undefined);
     setAuthenticated(false);
     setPortfolios([]);
+    setAccounts([]);
   }, []);
 
   const selectPortfolio = useCallback((id: number) => {
@@ -99,6 +109,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => ({
       authenticated,
       portfolios,
+      accounts,
       selectedPortfolioId,
       selectedPortfolio: portfolios.find((p) => p.id === selectedPortfolioId) ?? null,
       status,
@@ -107,10 +118,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
       logout,
       selectPortfolio,
       refreshPortfolios,
+      refreshAccounts,
       refreshStatus,
       toggleTheme: () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')),
     }),
-    [authenticated, portfolios, selectedPortfolioId, status, theme, login, logout, selectPortfolio, refreshPortfolios, refreshStatus],
+    [
+      authenticated,
+      portfolios,
+      accounts,
+      selectedPortfolioId,
+      status,
+      theme,
+      login,
+      logout,
+      selectPortfolio,
+      refreshPortfolios,
+      refreshAccounts,
+      refreshStatus,
+    ],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

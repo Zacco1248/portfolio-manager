@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { desc } from 'drizzle-orm';
 import type { SystemStatus } from '@portfolio/shared';
 import { config } from '../config.js';
+import { apiKeyFor } from '../services/ai-config.js';
+import { isTelegramEnabled } from '../services/telegram.js';
 import { db } from '../db/index.js';
 import { fxRates, jobRuns, portfolioSnapshots, providerHealth, quotes } from '../db/schema.js';
 
@@ -17,8 +19,10 @@ statusRouter.get('/', (_req, res) => {
     version: '0.1.0',
     baseCurrency: config.baseCurrency,
     features: {
-      ai: config.ai.enabled,
-      telegram: config.telegram.enabled,
+      // Klucze mogą pochodzić z ustawień, nie tylko z `.env` — pytamy więc
+      // o stan faktyczny, a nie o to, co było w pliku przy starcie procesu.
+      ai: Boolean(apiKeyFor('anthropic') ?? apiKeyFor('openai')),
+      telegram: isTelegramEnabled(),
       externalFetch: !config.prices.disableExternalFetch,
     },
     lastPriceUpdate: lastQuote?.ts ?? null,

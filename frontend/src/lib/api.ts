@@ -1,5 +1,7 @@
 import type {
   Candle,
+  Account,
+  AccountsReport,
   Alert,
   AlertEvent,
   AnalyticsResponse,
@@ -81,6 +83,19 @@ const query = (params: Record<string, string | number | undefined>): string => {
   return entries.length > 0 ? `?${entries.map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&')}` : '';
 };
 
+/** Wpis w koszu — transakcja usunięta, ale możliwa do przywrócenia. */
+export interface DeletedTransaction {
+  id: number;
+  transactionId: number;
+  type: Transaction['type'];
+  tradeDate: string;
+  amountPlnMinor: number;
+  deletedAt: string;
+  portfolioName: string;
+  accountName: string | null;
+  instrument: Instrument | null;
+}
+
 export interface PositionsResponse {
   positions: Position[];
   cash: { portfolioId: number; cashPlnMinor: number }[];
@@ -106,6 +121,14 @@ export const api = {
     remove: (id: number) => del<{ ok: boolean }>(`/portfolios/${id}`),
   },
 
+  accounts: {
+    list: (includeArchived = false) =>
+      get<Account[]>(`/accounts${includeArchived ? '?includeArchived=true' : ''}`),
+    create: (body: Record<string, unknown>) => post<Account>('/accounts', body),
+    update: (id: number, body: Record<string, unknown>) => patch<Account>(`/accounts/${id}`, body),
+    remove: (id: number) => del<{ ok: boolean }>(`/accounts/${id}`),
+  },
+
   instruments: {
     list: () => get<Instrument[]>('/instruments'),
     search: (q: string) =>
@@ -118,13 +141,17 @@ export const api = {
   },
 
   transactions: {
-    list: (params: { portfolioId?: number; instrumentId?: number; limit?: number }) =>
+    list: (params: { portfolioId?: number; instrumentId?: number; accountId?: number; limit?: number }) =>
       get<Transaction[]>(`/transactions${query(params)}`),
     create: (body: Record<string, unknown>) =>
       post<{ transaction: Transaction; warnings: string[] }>('/transactions', body),
     update: (id: number, body: Record<string, unknown>) =>
       patch<{ transaction: Transaction; warnings: string[] }>(`/transactions/${id}`, body),
     remove: (id: number) => del<{ ok: boolean; warnings: string[] }>(`/transactions/${id}`),
+    deleted: () => get<DeletedTransaction[]>('/transactions/kosz'),
+    restore: (id: number) =>
+      post<{ transaction: Transaction; warnings: string[] }>(`/transactions/kosz/${id}/przywroc`),
+    purge: (id: number) => del<{ ok: boolean }>(`/transactions/kosz/${id}`),
   },
 
   positions: {
@@ -137,15 +164,24 @@ export const api = {
 
   analytics: {
     dashboard: (portfolioId?: number) => get<DashboardResponse>(`/analytics/dashboard${query({ portfolioId })}`),
+    accounts: (portfolioId?: number) => get<AccountsReport>(`/analytics/accounts${query({ portfolioId })}`),
     get: (params: { portfolioId?: number; from?: string; benchmarks?: string }) =>
       get<AnalyticsResponse>(`/analytics${query(params)}`),
     stats: (portfolioId?: number) => get<StatsResponse>(`/analytics/stats${query({ portfolioId })}`),
     benchmarks: () => get<{ key: string; label: string; symbol: string }[]>('/analytics/benchmarks'),
     refreshBenchmarks: () => post<{ ok: boolean; message: string }>('/analytics/benchmarks/refresh'),
     technical: (instrumentId: number) =>
-      get<TechnicalResponse & { state: { rsi: number | null; rsiZone: string | null; trend: string | null } }>(
-        `/analytics/technical${query({ instrumentId })}`,
-      ),
+      get<
+        TechnicalResponse & {
+          state: {
+            rsi: number | null;
+            rsiZone: string | null;
+            trend: string | null;
+            /** Data świecy, z której policzono wskaźniki. */
+            asOf: string | null;
+          };
+        }
+      >(`/analytics/technical${query({ instrumentId })}`),
     dividends: (portfolioId?: number) => get<DividendSummary>(`/analytics/dividends${query({ portfolioId })}`),
     snapshot: () => post<{ ok: boolean; message: string }>('/analytics/snapshot'),
   },
@@ -174,6 +210,15 @@ export const api = {
     list: (params: { instrumentId?: number; importance?: string; sentiment?: string }) =>
       get<{ items: NewsItem[]; disclaimer: string }>(`/news${query(params)}`),
     refresh: () => post<{ ok: boolean; fetched: string; analyzed: string }>('/news/refresh'),
+    /** Treść artykułu do przeczytania bez opuszczania aplikacji. */
+    content: (id: number) =>
+      get<{
+        url: string;
+        title: string;
+        paragraphs: string[];
+        truncated: boolean;
+        message: string | null;
+      }>(`/news/${id}/tresc`),
     watchlist: () => get<Instrument[]>('/watchlist'),
     watch: (instrumentId: number) => post<{ ok: boolean }>('/watchlist', { instrumentId }),
     unwatch: (instrumentId: number) => del<{ ok: boolean }>(`/watchlist/${instrumentId}`),
@@ -218,6 +263,10 @@ export const api = {
       post<AssistResult<MonthlyFacts>>('/assist/monthly-summary', body),
     priceMove: (instrumentId: number, days?: number) =>
       post<AssistResult<PriceMoveFacts | null>>('/assist/price-move', { instrumentId, days }),
+    question: (body: { portfolioId?: number; question: string }) =>
+      post<AssistResult<QuickQuestionFacts>>('/assist/question', body),
+    sessionSummary: (portfolioId?: number) =>
+      post<AssistResult<SessionFacts>>('/assist/session-summary', { portfolioId }),
     purchaseCheck: (body: { portfolioId?: number; symbol: string; amount: string }) =>
       post<AssistResult<PurchaseCheckFacts>>('/assist/purchase-check', body),
     document: (text: string) =>
@@ -259,7 +308,7 @@ export const api = {
   },
 
   insights: {
-    get: (portfolioId?: number) =>
+    get: (portfolioId?: number, years?: number) =>
       get<{
         insights: { kind: string; title: string; detail: string; valuePlnMinor: number | null }[];
         projection: {
@@ -267,6 +316,7 @@ export const api = {
           monthlyContributionPlnMinor: number;
           assumedAnnualReturnBp: number;
           returnSource: 'xirr' | 'default';
+          years: number;
           note: string;
         };
         emergencyFund: {
@@ -280,7 +330,7 @@ export const api = {
           portfolioNames: string[];
         };
         narrative: string | null;
-      }>(`/insights${query({ portfolioId })}`),
+      }>(`/insights${query({ portfolioId, years })}`),
     /** Komentarz modelu, dociągany osobno — potrafi trwać kilkanaście sekund. */
     narrative: (portfolioId?: number) =>
       get<{ narrative: string | null }>(`/insights/narrative${query({ portfolioId })}`),
@@ -304,10 +354,23 @@ export const api = {
         provider: string;
         model: string;
         features: { key: string; label: string; description: string; dataSent: string; enabled: boolean; available: boolean; reason: string | null }[];
-        keys: { anthropic: boolean; openai: boolean };
+        keys: {
+          anthropic: boolean;
+          openai: boolean;
+          /** Podgląd klucza — pełnej wartości serwer nigdy nie odsyła. */
+          anthropicMasked: string | null;
+          openaiMasked: string | null;
+          anthropicSource: 'settings' | 'env' | null;
+          openaiSource: 'settings' | 'env' | null;
+        };
         suggestedModels: Record<string, { id: string; label: string; hint: string }[]>;
       }>('/ai'),
     update: (body: Record<string, unknown>) => patch<unknown>('/ai', body),
+    saveKey: (provider: 'anthropic' | 'openai', key: string) =>
+      post<{ status: unknown; test: { ok: boolean; message: string; latencyMs: number } | null }>('/ai/key', {
+        provider,
+        key,
+      }),
     test: () =>
       post<{
         ok: boolean;
@@ -428,6 +491,41 @@ export interface SavedAnalysis {
   text: string;
 }
 
+/** Kontekst przekazany do modelu przy swobodnym pytaniu. */
+export interface QuickQuestionFacts {
+  question: string;
+  positionsCount: number;
+  positions: {
+    symbol: string;
+    name: string;
+    assetClass: string;
+    sector: string | null;
+    country: string | null;
+    sharePortfolioBp: number;
+    unrealizedBp: number | null;
+  }[];
+  byAssetClass: { key: string; shareBp: number }[];
+  bySector: { key: string; shareBp: number }[];
+  cashShareBp: number;
+}
+
+/** Co działo się w ostatniej dobie na spółkach z portfela. */
+export interface SessionFacts {
+  asOf: string;
+  positionsCount: number;
+  gainers: number;
+  losers: number;
+  portfolioChangeBp: number | null;
+  movers: {
+    symbol: string;
+    name: string;
+    changeBp: number;
+    sharePortfolioBp: number;
+    headlines: string[];
+  }[];
+  staleCount: number;
+}
+
 export interface MonthlyFacts {
   month: string;
   valueStartPlnMinor: number | null;
@@ -517,6 +615,8 @@ export interface ResearchSnapshot {
       broker: string | null;
       rating: string | null;
       targetPriceE8: number | null;
+      /** Waluta ceny docelowej; null dla wpisów sprzed rozróżnienia walut. */
+      targetCurrency: string | null;
       direction: 'up' | 'down' | null;
       title: string;
       url: string;
@@ -526,6 +626,8 @@ export interface ResearchSnapshot {
     downgrades: number;
     scoreAvg: number | null;
     medianTargetE8: number | null;
+    /** Waluta mediany — ta sama, co waluta notowania instrumentu. */
+    targetCurrency: string | null;
     upsideBp: number | null;
     monthsCovered: number;
   };

@@ -15,11 +15,13 @@ import {
   earliestTransactionDate,
   refreshAllBenchmarks,
 } from '../services/analytics.js';
+import { buildAccountBreakdown } from '../services/accounts-report.js';
 import { buildDashboard } from '../services/dashboard.js';
 import { buildStats } from '../services/stats.js';
 import { grossUpWithheld } from '../services/tax.js';
 import { upcomingDividends } from '../services/corporate-actions.js';
 import { activePortfolioIds, buildPositions, toInstrumentDto } from '../services/positions.js';
+import { backfillInstrumentHistory, historyNeedsRefresh } from '../services/prices.js';
 import { computeIndicators, currentState, detectSignals } from '../services/technical.js';
 import { writeDailySnapshot } from '../services/snapshots.js';
 
@@ -40,6 +42,13 @@ analyticsRouter.get('/dashboard', (req, res, next) => {
   const parsed = portfolioQuery.safeParse(req.query);
   if (!parsed.success) return next(parsed.error);
   res.json(buildDashboard(activePortfolioIds(parsed.data.portfolioId)));
+});
+
+/** Rozbicie portfela na konta — „ile na plus, ile na minus w danym miejscu". */
+analyticsRouter.get('/accounts', (req, res, next) => {
+  const parsed = portfolioQuery.safeParse(req.query);
+  if (!parsed.success) return next(parsed.error);
+  res.json(buildAccountBreakdown(activePortfolioIds(parsed.data.portfolioId)));
 });
 
 analyticsRouter.get('/', (req, res, next) => {
@@ -79,46 +88,64 @@ analyticsRouter.post('/snapshot', (_req, res) => {
 });
 
 // ── Analiza techniczna ───────────────────────────────────────
-analyticsRouter.get('/technical', (req, res, next) => {
-  const parsed = technicalQuerySchema.safeParse(req.query);
-  if (!parsed.success) return next(parsed.error);
+analyticsRouter.get(
+  '/technical',
+  asyncHandler(async (req, res, next) => {
+    const parsed = technicalQuerySchema.safeParse(req.query);
+    if (!parsed.success) return next(parsed.error);
 
-  const instrument = db.select().from(instruments).where(eq(instruments.id, parsed.data.instrumentId)).get();
-  if (!instrument) return next(notFound('Nie ma takiego instrumentu'));
+    const instrument = db.select().from(instruments).where(eq(instruments.id, parsed.data.instrumentId)).get();
+    if (!instrument) return next(notFound('Nie ma takiego instrumentu'));
 
-  const to = parsed.data.to ?? today(config.timezone);
-  // Domyślnie dwa lata — SMA 200 potrzebuje sporo historii, żeby w ogóle zaistnieć.
-  const from = parsed.data.from ?? addDays(to, -730);
+    /*
+     * Wskaźniki liczone z nieaktualnych świec wyglądają identycznie jak
+     * świeże, więc zanim cokolwiek policzymy, uzupełniamy historię. Bez tego
+     * RSI potrafił pochodzić sprzed roku — endpoint czytał wyłącznie z bazy
+     * i nigdy nie sprawdzał, jak stara jest ostatnia świeca.
+     */
+    if (historyNeedsRefresh(instrument.id)) {
+      try {
+        await backfillInstrumentHistory(instrument.id);
+      } catch {
+        // Brak łączności nie może wywrócić widoku — liczymy z tego, co jest,
+        // a `state.asOf` pokaże użytkownikowi, jak stare są dane.
+      }
+    }
 
-  const rows = db
-    .select()
-    .from(pricesDaily)
-    .where(
-      and(eq(pricesDaily.instrumentId, instrument.id), gte(pricesDaily.date, from), lte(pricesDaily.date, to)),
-    )
-    .orderBy(asc(pricesDaily.date))
-    .all();
+    const to = parsed.data.to ?? today(config.timezone);
+    // Domyślnie dwa lata — SMA 200 potrzebuje sporo historii, żeby w ogóle zaistnieć.
+    const from = parsed.data.from ?? addDays(to, -730);
 
-  const candles: Candle[] = rows.map((r) => ({
-    date: r.date,
-    openE8: r.openE8 ?? r.closeE8,
-    highE8: r.highE8 ?? r.closeE8,
-    lowE8: r.lowE8 ?? r.closeE8,
-    closeE8: r.closeE8,
-    volume: r.volume,
-  }));
+    const rows = db
+      .select()
+      .from(pricesDaily)
+      .where(
+        and(eq(pricesDaily.instrumentId, instrument.id), gte(pricesDaily.date, from), lte(pricesDaily.date, to)),
+      )
+      .orderBy(asc(pricesDaily.date))
+      .all();
 
-  const indicators = computeIndicators(candles);
-  const response: TechnicalResponse & { state: ReturnType<typeof currentState> } = {
-    instrument: toInstrumentDto(instrument),
-    candles,
-    indicators,
-    signals: detectSignals(candles, indicators),
-    state: currentState(indicators, candles),
-  };
+    const candles: Candle[] = rows.map((r) => ({
+      date: r.date,
+      openE8: r.openE8 ?? r.closeE8,
+      highE8: r.highE8 ?? r.closeE8,
+      lowE8: r.lowE8 ?? r.closeE8,
+      closeE8: r.closeE8,
+      volume: r.volume,
+    }));
 
-  res.json(response);
-});
+    const indicators = computeIndicators(candles);
+    const response: TechnicalResponse & { state: ReturnType<typeof currentState> } = {
+      instrument: toInstrumentDto(instrument),
+      candles,
+      indicators,
+      signals: detectSignals(candles, indicators),
+      state: currentState(indicators, candles),
+    };
+
+    res.json(response);
+  }),
+);
 
 // ── Dywidendy ────────────────────────────────────────────────
 analyticsRouter.get('/dividends', (req, res, next) => {

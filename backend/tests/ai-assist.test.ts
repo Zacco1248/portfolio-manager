@@ -56,14 +56,14 @@ describe('region ekspozycji funduszu', () => {
         symbol: 'LON:CSPX',
         name: 'iShares Core S&P 500 UCITS ETF',
         exchange: 'LON',
-        assetClass: 'etf',
+        assetClass: 'etf_foreign',
       }).country,
     ).toBe('USA');
   });
 
   it('bez rozpoznanego indeksu ETF spada do kraju notowania', () => {
     expect(
-      localClassification({ symbol: 'LON:XYZ', name: 'Fundusz nieznany', exchange: 'LON', assetClass: 'etf' }).country,
+      localClassification({ symbol: 'LON:XYZ', name: 'Fundusz nieznany', exchange: 'LON', assetClass: 'etf_foreign' }).country,
     ).toBe('Wielka Brytania');
   });
 });

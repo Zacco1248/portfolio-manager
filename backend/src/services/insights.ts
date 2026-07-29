@@ -62,6 +62,8 @@ export interface InsightsResponse {
     assumedAnnualReturnBp: number;
     /** Skąd wzięliśmy założoną stopę zwrotu. */
     returnSource: 'xirr' | 'default';
+    /** Horyzont, dla którego policzono punkty. */
+    years: number;
     note: string;
   };
   /** Treść wygenerowana przez model; null gdy AI jest wyłączone. */
@@ -69,7 +71,16 @@ export interface InsightsResponse {
 }
 
 const DEFAULT_ANNUAL_RETURN_BP = 500; // 5% — ostrożne założenie, gdy brak własnej historii
-const PROJECTION_YEARS = 5;
+
+/** Horyzonty do wyboru w interfejsie. */
+export const PROJECTION_HORIZONS = [3, 5, 10, 15, 20, 30] as const;
+const DEFAULT_PROJECTION_YEARS = 5;
+
+/**
+ * Od tego horyzontu ekstrapolacja przestaje być użyteczna jako liczba,
+ * a zaczyna być ćwiczeniem z procentu składanego — i trzeba to powiedzieć.
+ */
+const LONG_HORIZON_YEARS = 15;
 
 /** Średnia miesięczna wpłata z ostatniego roku. */
 function monthlyContribution(portfolioIds: number[]): number {
@@ -170,7 +181,13 @@ export function emergencyFundStatus(): EmergencyFundStatus {
  * się z faktycznego XIRR portfela — jeśli jest zbyt krótka historia, spadamy
  * na ostrożne 5%, zamiast ekstrapolować przypadkowy wynik z kilku tygodni.
  */
-export function buildProjection(portfolioIds: number[]): InsightsResponse['projection'] {
+export function buildProjection(
+  portfolioIds: number[],
+  years: number = DEFAULT_PROJECTION_YEARS,
+): InsightsResponse['projection'] {
+  // Horyzont spoza listy braliśmy dotąd z kodu; teraz przychodzi z zapytania,
+  // więc trzeba go domknąć do rozsądnego zakresu.
+  const horizon = Math.min(Math.max(Math.round(years), 1), 40);
   const { positions, cashByPortfolio } = buildPositions(portfolioIds);
   const current =
     positions.reduce((sum, p) => sum + p.valuePlnMinor, 0) +
@@ -192,7 +209,7 @@ export function buildProjection(portfolioIds: number[]): InsightsResponse['proje
   let value = current;
   let contributed = current;
 
-  for (let year = 1; year <= PROJECTION_YEARS; year += 1) {
+  for (let year = 1; year <= horizon; year += 1) {
     for (let month = 0; month < 12; month += 1) {
       value = value * (1 + monthlyRate) + monthly;
       contributed += monthly;
@@ -209,12 +226,17 @@ export function buildProjection(portfolioIds: number[]): InsightsResponse['proje
     monthlyContributionPlnMinor: monthly,
     assumedAnnualReturnBp: annualBp,
     returnSource: usableXirr === null ? 'default' : 'xirr',
+    years: horizon,
     note:
-      usableXirr === null
+      (usableXirr === null
         ? `Projekcja przy założeniu ${(DEFAULT_ANNUAL_RETURN_BP / 100).toFixed(1)}% rocznie — Twoja historia jest ` +
           'za krótka, żeby wyliczyć wiarygodną stopę zwrotu. To ekstrapolacja tempa, nie prognoza rynku.'
         : `Projekcja przy Twoim dotychczasowym XIRR (${(annualBp / 100).toFixed(1)}% rocznie) i średniej wpłacie ` +
-          'z ostatniego roku. To ekstrapolacja tempa, nie prognoza rynku — rzeczywisty wynik będzie inny.',
+          'z ostatniego roku. To ekstrapolacja tempa, nie prognoza rynku — rzeczywisty wynik będzie inny.') +
+      (horizon >= LONG_HORIZON_YEARS
+        ? ` Przy ${horizon} latach nawet niewielka pomyłka w stopie zwrotu zmienia wynik wielokrotnie — ` +
+          'traktuj tę liczbę jako ćwiczenie z procentu składanego, nie jako przewidywanie.'
+        : ''),
   };
 }
 

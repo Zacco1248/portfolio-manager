@@ -1,8 +1,18 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ASSET_CLASS_LABELS } from '@portfolio/shared';
+import { rollUp } from '@portfolio/shared';
 import type { AssetClass, Position } from '@portfolio/shared';
-import { Card, DataTable, EmptyState, ErrorBanner, PercentCell, Spinner, Toast, useToast } from '@/components/ui';
+import {
+  AssetClassSelect,
+  Card,
+  DataTable,
+  EmptyState,
+  ErrorBanner,
+  PercentCell,
+  Spinner,
+  Toast,
+  useToast,
+} from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatPln, formatPrice, formatQuantity, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
@@ -26,7 +36,15 @@ export function Positions() {
     const needle = filter.trim().toLowerCase();
 
     const filtered = data.positions.filter((p) => {
-      if (assetClass !== 'all' && p.instrument.assetClass !== assetClass) return false;
+      // „Akcje" pokazują polskie i zagraniczne razem — filtr działa na obu
+      // poziomach hierarchii.
+      if (
+        assetClass !== 'all' &&
+        p.instrument.assetClass !== assetClass &&
+        rollUp(p.instrument.assetClass) !== assetClass
+      ) {
+        return false;
+      }
       if (!needle) return true;
       return (
         p.instrument.symbol.toLowerCase().includes(needle) || p.instrument.name.toLowerCase().includes(needle)
@@ -80,18 +98,13 @@ export function Positions() {
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
-        <select
+        <AssetClassSelect
           className="input h-8 w-auto py-0"
           value={assetClass}
-          onChange={(e) => setAssetClass(e.target.value as AssetClass | 'all')}
-        >
-          <option value="all">Wszystkie klasy</option>
-          {Object.entries(ASSET_CLASS_LABELS).map(([key, label]) => (
-            <option key={key} value={key}>
-              {label}
-            </option>
-          ))}
-        </select>
+          onChange={(value) => setAssetClass(value as AssetClass | 'all')}
+          allowAll
+          allowGroups
+        />
         <button type="button" className="btn ml-auto" onClick={() => void refresh()} disabled={refreshing}>
           {refreshing ? 'Odświeżam…' : 'Odśwież ceny'}
         </button>

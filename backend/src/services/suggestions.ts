@@ -1,5 +1,5 @@
-import { ASSET_CLASS_LABELS, shareBp } from '@portfolio/shared';
-import type { AssetClass } from '@portfolio/shared';
+import { ASSET_CLASS_GROUP_LABELS, rollUp, shareBp } from '@portfolio/shared';
+import type { AssetClass, AssetClassGroup } from '@portfolio/shared';
 import { errorMessage } from '../lib/errors.js';
 import { createLogger } from '../lib/logger.js';
 import { checkFeature } from './ai-config.js';
@@ -39,8 +39,14 @@ export interface SuggestionContext {
   concentrated: { symbol: string; sharePercent: number }[];
 }
 
-/** Klasy aktywów, których brak w portfelu wypada odnotować. */
-const EXPECTED_CLASSES: AssetClass[] = ['stock', 'etf', 'bond', 'metal', 'crypto'];
+/**
+ * Klasy aktywów, których brak w portfelu wypada odnotować.
+ *
+ * Na poziomie grup: „brak akcji" jest sensowną obserwacją, „brak akcji
+ * polskich" przy pełnym portfelu zagranicznym byłaby już podpowiadaniem
+ * konkretnej ekspozycji.
+ */
+const EXPECTED_CLASSES: AssetClassGroup[] = ['stock', 'etf', 'bond', 'metal', 'crypto'];
 
 /** Próg, od którego pojedyncza pozycja jest uznawana za skoncentrowaną. */
 const CONCENTRATION_PERCENT = 15;
@@ -77,14 +83,14 @@ export function buildContext(portfolioId?: number): SuggestionContext {
       .sort((a, b) => b.sharePercent - a.sharePercent);
   };
 
-  const presentClasses = new Set(positions.map((p) => p.instrument.assetClass));
+  const presentGroups = new Set(positions.map((p) => rollUp(p.instrument.assetClass)));
 
   return {
     gaps: plan.actions.filter((a) => a.driftBp < 0).map(toGap),
     overweight: plan.actions.filter((a) => a.driftBp > 0).map(toGap),
     sectors: groupShares((p) => p.instrument.sector),
     regions: groupShares((p) => p.instrument.country),
-    missingAssetClasses: EXPECTED_CLASSES.filter((c) => !presentClasses.has(c)).map((c) => ASSET_CLASS_LABELS[c]),
+    missingAssetClasses: EXPECTED_CLASSES.filter((c) => !presentGroups.has(c)).map((c) => ASSET_CLASS_GROUP_LABELS[c]),
     concentrated: positions
       .map((p) => ({
         symbol: p.instrument.symbol,

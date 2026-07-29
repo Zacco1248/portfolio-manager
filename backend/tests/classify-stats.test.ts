@@ -1,22 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { localClassification } from '../src/services/classify.js';
+import { etfExposure, localClassification } from '../src/services/classify.js';
 import { dailyReturns } from '../src/services/stats.js';
 import { toYahooSymbol } from '../src/providers/yahoo.js';
 
 describe('klasyfikacja lokalna', () => {
   it('rozpoznaje kraj po prefiksie rynku w symbolu', () => {
-    expect(localClassification({ symbol: 'WSE:PKO', exchange: null, assetClass: 'stock' }).country).toBe('Polska');
-    expect(localClassification({ symbol: 'LON:IUIT', exchange: null, assetClass: 'etf' }).country).toBe(
+    expect(localClassification({ symbol: 'WSE:PKO', exchange: null, assetClass: 'stock_pl' }).country).toBe('Polska');
+    // Dla pojedynczej spółki rynek notowania nadal rozstrzyga. Fundusze
+    // są wyjątkiem — u nich liczy się ekspozycja, nie miejsce notowania.
+    expect(localClassification({ symbol: 'LON:HSBA', exchange: null, assetClass: 'stock_foreign' }).country).toBe(
       'Wielka Brytania',
     );
   });
 
   it('rozpoznaje kraj po sufiksie symbolu dostawcy', () => {
-    expect(localClassification({ symbol: 'PKO.WA', exchange: null, assetClass: 'stock' }).country).toBe('Polska');
+    expect(localClassification({ symbol: 'PKO.WA', exchange: null, assetClass: 'stock_pl' }).country).toBe('Polska');
   });
 
   it('pole exchange ma pierwszeństwo przed zgadywaniem z symbolu', () => {
-    expect(localClassification({ symbol: 'IUIT', exchange: 'NYSE', assetClass: 'etf' }).country).toBe('USA');
+    // Ticker spoza listy znanych funduszy — rozstrzyga giełda.
+    expect(localClassification({ symbol: 'XYZW', exchange: 'NYSE', assetClass: 'etf_foreign' }).country).toBe('USA');
   });
 
   it('obligacjom i metalom nadaje sektor bez odpytywania dostawcy', () => {
@@ -31,7 +34,7 @@ describe('klasyfikacja lokalna', () => {
   });
 
   it('dla nieznanego rynku nie zmyśla kraju', () => {
-    expect(localClassification({ symbol: 'FOO', exchange: 'ZZZ', assetClass: 'stock' }).country).toBeNull();
+    expect(localClassification({ symbol: 'FOO', exchange: 'ZZZ', assetClass: 'stock_pl' }).country).toBeNull();
   });
 });
 
@@ -98,7 +101,7 @@ describe('przebieg obsunięcia', () => {
 });
 
 describe('symbol dla dostawcy notowań', () => {
-  const base = { id: 1, assetClass: 'stock' as const, provider: null, providerSymbol: null, unit: null };
+  const base = { id: 1, assetClass: 'stock_pl' as const, provider: null, providerSymbol: null, unit: null };
 
   it('goły ticker w złotych dostaje sufiks GPW', () => {
     expect(toYahooSymbol({ ...base, symbol: 'XTB', currency: 'PLN', exchange: null })).toBe('XTB.WA');
@@ -120,5 +123,50 @@ describe('symbol dla dostawcy notowań', () => {
 
   it('jawny prefiks rynku ma pierwszeństwo', () => {
     expect(toYahooSymbol({ ...base, symbol: 'LON:IUIT', currency: 'PLN', exchange: null })).toBe('IUIT.L');
+  });
+});
+
+/**
+ * Regres dla zgłoszenia o rebalansie: `LON:IUIT` był klasyfikowany jako
+ * ekspozycja na Wielką Brytanię, bo tam jest notowany, a `EIMI` nie trafiał
+ * w rynki wschodzące, bo sam ticker niczego nie mówi regexom po nazwie.
+ */
+describe('ekspozycja ETF-ów rozpoznawana po tickerze', () => {
+  it('nie myli rynku notowania z rynkiem ekspozycji', () => {
+    expect(etfExposure('LON:IUIT')?.region).toBe('USA');
+    expect(etfExposure('LON:VUAA')?.region).toBe('USA');
+    expect(etfExposure('CSPX.L')?.region).toBe('USA');
+  });
+
+  it('rozpoznaje rynki wschodzące po samym tickerze', () => {
+    expect(etfExposure('EIMI')?.region).toBe('Rynki wschodzące');
+    expect(etfExposure('LON:EIMI')?.region).toBe('Rynki wschodzące');
+    expect(etfExposure('EMIM.AS')?.region).toBe('Rynki wschodzące');
+  });
+
+  it('dokłada sektor dla funduszy sektorowych', () => {
+    expect(etfExposure('IUIT')?.sector).toBe('Technologia');
+    // Fundusz szeroki nie ma jednego sektora — zostaje kategoria zbiorcza.
+    expect(etfExposure('SWDA')?.sector).toBeUndefined();
+  });
+
+  it('nieznany ticker nie jest zgadywany', () => {
+    expect(etfExposure('JAKIS')).toBeNull();
+  });
+
+  it('klasyfikacja lokalna używa ekspozycji zamiast kraju notowania', () => {
+    const iuit = localClassification({ symbol: 'LON:IUIT', exchange: 'LON', assetClass: 'etf_foreign' });
+    expect(iuit.country).toBe('USA');
+    expect(iuit.sector).toBe('Technologia');
+
+    const eimi = localClassification({ symbol: 'EIMI', exchange: 'LON', assetClass: 'etf_foreign' });
+    expect(eimi.country).toBe('Rynki wschodzące');
+  });
+
+  it('akcja notowana w Londynie nadal jest brytyjska', () => {
+    // Reguła dotyczy funduszy — dla pojedynczej spółki rynek notowania
+    // pozostaje najlepszą dostępną przesłanką.
+    const spolka = localClassification({ symbol: 'LON:HSBA', exchange: 'LON', assetClass: 'stock_foreign' });
+    expect(spolka.country).toBe('Wielka Brytania');
   });
 });

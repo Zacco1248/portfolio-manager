@@ -43,6 +43,34 @@
       "when": 1785244079467,
       "tag": "0005_vengeful_the_order",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1785322322002,
+      "tag": "0006_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1785324764251,
+      "tag": "0007_asset_class_split",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1785330552664,
+      "tag": "0008_deleted_transactions",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1785334907775,
+      "tag": "0009_rating_target_currency",
+      "breakpoints": true
     }
   ]
 }

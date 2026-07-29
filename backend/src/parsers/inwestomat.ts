@@ -1,7 +1,7 @@
 import { cellText, readXlsx } from '../lib/xlsx.js';
 import type { CellValue, XlsxSheet } from '../lib/xlsx.js';
 import type { AssetClass, TransactionType } from '@portfolio/shared';
-import { toMinor } from '@portfolio/shared';
+import { equityClassFor, toMinor } from '@portfolio/shared';
 import { normalizeDate } from '../lib/dates.js';
 import { createLogger } from '../lib/logger.js';
 import type {
@@ -33,7 +33,7 @@ const CPI_SHEET = ['inflacja', 'cpi'];
 
 /** Nagłówek w arkuszu → pole wewnętrzne. Dopasowanie bez znaków diakrytycznych. */
 const COLUMN_ALIASES: Record<string, string[]> = {
-  account: ['konto', 'portfel', 'rachunek'],
+  account: ['konto', 'rachunek'],
   date: ['data', 'data transakcji'],
   symbol: ['ticker', 'symbol'],
   currency: ['waluta'],
@@ -60,13 +60,28 @@ const TYPE_ALIASES: { match: string[]; type: TransactionType }[] = [
   { match: ['split'], type: 'split' },
 ];
 
-const ASSET_CLASS_ALIASES: { match: string[]; assetClass: AssetClass }[] = [
-  { match: ['akcje'], assetClass: 'stock' },
-  { match: ['etf'], assetClass: 'etf' },
+/**
+ * Etykieta z arkusza → klasa aktywów.
+ *
+ * Kolejność jest logiką, nie kosmetyką: dopasowanie idzie po zawieraniu
+ * podciągu i wygrywa pierwsze trafienie. „Obligacje skarbowe polskie" musi
+ * więc trafić przed czymkolwiek reagującym na słowo „polskie", a „Akcje
+ * polskie" przed ogólnym „akcje".
+ *
+ * Wpisy `group` nie rozstrzygają osi krajowej — domyka ją `mapAssetClass`
+ * na podstawie symbolu i waluty wiersza.
+ */
+const ASSET_CLASS_ALIASES: { match: string[]; assetClass?: AssetClass; group?: 'stock' | 'etf' }[] = [
   { match: ['obligacje'], assetClass: 'bond' },
   { match: ['metale', 'surowce'], assetClass: 'metal' },
   { match: ['krypto'], assetClass: 'crypto' },
   { match: ['gotowka', 'waluty'], assetClass: 'cash' },
+  { match: ['etf polskie', 'etf polski', 'etf krajowe'], assetClass: 'etf_pl' },
+  { match: ['etf zagraniczne', 'etf zagraniczny'], assetClass: 'etf_foreign' },
+  { match: ['akcje polskie', 'akcje krajowe'], assetClass: 'stock_pl' },
+  { match: ['akcje zagraniczne'], assetClass: 'stock_foreign' },
+  { match: ['etf'], group: 'etf' },
+  { match: ['akcje'], group: 'stock' },
 ];
 
 /** Usuwa polskie znaki i normalizuje do porównań nagłówków. */
@@ -90,12 +105,18 @@ function mapType(raw: string): TransactionType | null {
   return null;
 }
 
-function mapAssetClass(raw: string): AssetClass {
+function mapAssetClass(raw: string, instrument?: { symbol: string; currency: string }): AssetClass {
   const folded = fold(raw);
+  const context = { symbol: instrument?.symbol ?? '', exchange: null, currency: instrument?.currency ?? '' };
+
   for (const entry of ASSET_CLASS_ALIASES) {
-    if (entry.match.some((m) => folded.includes(m))) return entry.assetClass;
+    if (!entry.match.some((m) => folded.includes(m))) continue;
+    return entry.assetClass ?? equityClassFor(entry.group!, context);
   }
-  return 'stock';
+
+  // Nierozpoznana etykieta to najczęściej pojedyncza spółka — oś krajową
+  // rozstrzygamy z symbolu i waluty, a nie zgadujemy.
+  return equityClassFor('stock', context);
 }
 
 function findSheet(sheets: XlsxSheet[], names: string[]): XlsxSheet | null {
@@ -379,7 +400,7 @@ export const inwestomatParser: ImportParser = {
       }
 
       const rawSymbol = read('symbol');
-      const assetClass = mapAssetClass(read('assetClass'));
+      const assetClass = mapAssetClass(read('assetClass'), { symbol: rawSymbol, currency: read('currency') || 'PLN' });
       const isCash = assetClass === 'cash' || fold(rawSymbol) === 'gotowka';
       const currency = (read('currency') || 'PLN').toUpperCase();
 
@@ -394,6 +415,7 @@ export const inwestomatParser: ImportParser = {
         type,
         rawSymbol: isCash ? null : rawSymbol || null,
         instrumentName: read('name') || null,
+        account: read('account') || null,
         assetClass,
         currency: isCashFlow ? 'PLN' : currency,
         currencyInferred: false,

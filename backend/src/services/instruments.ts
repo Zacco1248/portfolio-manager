@@ -1,5 +1,6 @@
 import { and, eq, like, or } from 'drizzle-orm';
-import type { AssetClass } from '@portfolio/shared';
+import { equityClassFor } from '@portfolio/shared';
+import type { AssetClass, AssetClassGroup } from '@portfolio/shared';
 import { db } from '../db/index.js';
 import { instrumentAliases, instruments } from '../db/schema.js';
 import type { InstrumentRow } from '../db/schema.js';
@@ -282,7 +283,13 @@ export async function suggestSymbols(query: string, assetClass?: AssetClass): Pr
         symbol: q.symbol!,
         name: q.longname ?? q.shortname ?? q.symbol!,
         exchange: q.exchDisp ?? q.exchange ?? null,
-        assetClass: assetClassFromQuoteType(q.quoteType),
+        // Dostawca zna tylko oś akcje/fundusz — oś krajową domykamy sami
+        // z symbolu i rynku (papier z GPW przychodzi z sufiksem `.WA`).
+        assetClass: closeEquityAxis(assetClassFromQuoteType(q.quoteType), {
+          symbol: q.symbol!,
+          exchange: q.exchDisp ?? q.exchange ?? null,
+          currency: '',
+        }),
         currency: null,
         source: 'yahoo' as const,
       }))
@@ -296,7 +303,20 @@ export async function suggestSymbols(query: string, assetClass?: AssetClass): Pr
   }
 }
 
-function assetClassFromQuoteType(quoteType: string | undefined): AssetClass {
+/**
+ * Typ z wyszukiwarki dostawcy → GRUPA klasy aktywów. Oś krajową domyka
+ * `equityClassFor` u wołającego, na podstawie rynku notowania.
+ */
+/** Grupa → liść: dokłada oś krajową tam, gdzie ma ona sens. */
+function closeEquityAxis(
+  group: AssetClassGroup,
+  instrument: { symbol: string; exchange: string | null; currency: string },
+): AssetClass {
+  if (group === 'stock' || group === 'etf') return equityClassFor(group, instrument);
+  return group as AssetClass;
+}
+
+function assetClassFromQuoteType(quoteType: string | undefined): AssetClassGroup {
   switch (quoteType?.toUpperCase()) {
     case 'ETF':
       return 'etf';

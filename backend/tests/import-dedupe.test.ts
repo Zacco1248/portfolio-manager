@@ -12,7 +12,8 @@ function row(overrides: Partial<ParsedRow> = {}): ParsedRow {
     type: 'buy',
     rawSymbol: 'XTB.PL',
     instrumentName: null,
-    assetClass: 'stock',
+    account: null,
+    assetClass: 'stock_pl',
     currency: 'PLN',
     currencyInferred: false,
     quantity: '2',
@@ -40,6 +41,21 @@ describe('hash wiersza importu', () => {
 
   it('różni się przy innym parserze', () => {
     expect(hashRow('xtb-mhtml', 1, row())).not.toBe(hashRow('inwestomat-xlsx', 1, row()));
+  });
+
+  /*
+   * Bezpiecznik idempotencji importu.
+   *
+   * Konto zostało dołożone do `ParsedRow` po tym, jak użytkownik miał już
+   * zaimportowane transakcje. Gdyby weszło do hasza, wszystkie wcześniejsze
+   * wiersze przestałyby być rozpoznawane jako duplikaty i cały arkusz wgrałby
+   * się drugi raz — z podwojonym portfelem i rozsypanym FIFO.
+   */
+  it('NIE zmienia się przy zmianie konta', () => {
+    const base = hashRow('inwestomat-xlsx', 1, row());
+    expect(hashRow('inwestomat-xlsx', 1, row({ account: 'XTB' }))).toBe(base);
+    expect(hashRow('inwestomat-xlsx', 1, row({ account: 'PKO' }))).toBe(base);
+    expect(hashRow('inwestomat-xlsx', 1, row({ account: null }))).toBe(base);
   });
 
   it('reaguje na zmianę ilości, ceny i daty', () => {

@@ -9,6 +9,8 @@ import {
   listAnalyses,
   explainPriceMove,
   monthlySummary,
+  quickQuestion,
+  sessionSummary,
   purchaseCheck,
   suggestImportMapping,
   summarizeDocument,
@@ -37,6 +39,37 @@ assistRouter.post(
   asyncHandler(async (req, res) => {
     const parsed = monthlySchema.parse(req.body ?? {});
     res.json(await monthlySummary(parsed.portfolioId, parsed.month));
+  }),
+);
+
+/**
+ * Swobodne pytanie o portfel.
+ *
+ * Model dostaje strukturę portfela bez kwot i ma opisać czynniki, a nie wydać
+ * zalecenie — pilnuje tego prompt, bo pytania w rodzaju „czy sprzedać X"
+ * z natury proszą o poradę inwestycyjną, której ta aplikacja nie udziela.
+ */
+assistRouter.post(
+  '/question',
+  asyncHandler(async (req, res) => {
+    const parsed = z
+      .object({ portfolioId, question: z.string().trim().min(3, 'Zadaj pytanie').max(500) })
+      .parse(req.body ?? {});
+    res.json(await quickQuestion(parsed.question, parsed.portfolioId));
+  }),
+);
+
+/**
+ * Podsumowanie ostatniej doby na spółkach z portfela.
+ *
+ * Bez parametrów poza portfelem — okno jest stałe, bo to odpowiedź na pytanie
+ * „co się dziś działo", zadawane zwykle raz dziennie.
+ */
+assistRouter.post(
+  '/session-summary',
+  asyncHandler(async (req, res) => {
+    const parsed = z.object({ portfolioId }).parse(req.body ?? {});
+    res.json(await sessionSummary(parsed.portfolioId));
   }),
 );
 

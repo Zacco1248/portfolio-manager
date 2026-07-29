@@ -15,7 +15,7 @@ function position(
       id: symbol.length,
       symbol,
       name: symbol,
-      assetClass: 'stock',
+      assetClass: 'stock_pl',
       currency: 'PLN',
       isin: null,
       exchange: null,
@@ -55,7 +55,8 @@ describe('rebalans — grupowanie', () => {
       'asset_class',
     );
 
-    expect(values.get('stock')).toBe(6000_00);
+    // Grupowanie zwraca liście — akcje krajowe, nie zbiorczą kategorię „akcje".
+    expect(values.get('stock_pl')).toBe(6000_00);
     expect(values.get('bond')).toBe(2000_00);
     expect(values.get('cash')).toBe(2000_00);
   });
@@ -247,7 +248,7 @@ describe('kontrola koncentracji', () => {
 
   it('nie traktuje ETF-a jak pojedynczej spółki', () => {
     const warnings = detectConcentration(
-      [position('SWRD', 9000_00, { assetClass: 'etf' }), position('CDR', 1000_00)],
+      [position('SWRD', 9000_00, { assetClass: 'etf_foreign' }), position('CDR', 1000_00)],
       thresholds,
     );
     expect(warnings.some((w) => w.kind === 'concentration_instrument')).toBe(false);
@@ -274,8 +275,8 @@ describe('kontrola koncentracji', () => {
   });
 
   it('wykrywa nakładanie się ETF-ów', () => {
-    const a = position('ETF1', 5000_00, { assetClass: 'etf', id: 1 });
-    const b = position('ETF2', 5000_00, { assetClass: 'etf', id: 2 });
+    const a = position('ETF1', 5000_00, { assetClass: 'etf_foreign', id: 1 });
+    const b = position('ETF2', 5000_00, { assetClass: 'etf_foreign', id: 2 });
     const holdings = new Map([
       [1, [{ symbol: 'AAPL', weightBp: 3000 }, { symbol: 'MSFT', weightBp: 2000 }]],
       [2, [{ symbol: 'AAPL', weightBp: 2500 }, { symbol: 'NVDA', weightBp: 1000 }]],
@@ -287,8 +288,8 @@ describe('kontrola koncentracji', () => {
   });
 
   it('nie zgaduje składu funduszu bez danych o ekspozycji', () => {
-    const a = position('ETF1', 5000_00, { assetClass: 'etf', id: 1 });
-    const b = position('ETF2', 5000_00, { assetClass: 'etf', id: 2 });
+    const a = position('ETF1', 5000_00, { assetClass: 'etf_foreign', id: 1 });
+    const b = position('ETF2', 5000_00, { assetClass: 'etf_foreign', id: 2 });
     expect(detectEtfOverlap([a, b], new Map(), 3000)).toHaveLength(0);
   });
 

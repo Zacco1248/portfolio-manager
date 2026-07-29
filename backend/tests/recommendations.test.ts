@@ -72,3 +72,46 @@ describe('kierunek zmiany bez kwoty', () => {
     expect(parseRecommendation('Kolejny analityk obniżył rekomendację dla akcji Orlenu').direction).toBe('down');
   });
 });
+
+/**
+ * Waluta ceny docelowej.
+ *
+ * Regex wymagał wcześniej „zł", więc dla spółek notowanych w dolarach czy euro
+ * cena docelowa nigdy się nie odczytywała — a interfejs i tak dopisywał do niej
+ * „zł", czyli mylił jednostki. Teraz waluta jedzie razem z kwotą.
+ */
+describe('waluta ceny docelowej', () => {
+  it('czyta wycenę w złotych i oznacza ją jako PLN', () => {
+    const parsed = parseRecommendation('DM BOŚ podnosi cenę docelową Orlenu do 95,70 zł', null);
+    expect(parsed.targetPriceE8).toBe(95_70 * 1_000_000);
+    expect(parsed.targetCurrency).toBe('PLN');
+  });
+
+  it('czyta wycenę w dolarach — zapis po kwocie i przed nią', () => {
+    const po = parseRecommendation('Analitycy podnoszą cenę docelową do 250 USD', null);
+    expect(po.targetPriceE8).toBe(250 * 100_000_000);
+    expect(po.targetCurrency).toBe('USD');
+
+    const przed = parseRecommendation('Morgan Stanley: target price $180 dla spółki', null);
+    expect(przed.targetPriceE8).toBe(180 * 100_000_000);
+    expect(przed.targetCurrency).toBe('USD');
+  });
+
+  it('czyta wycenę w euro', () => {
+    const parsed = parseRecommendation('Cena docelowa 64,50 EUR po wynikach kwartalnych', null);
+    expect(parsed.targetPriceE8).toBe(64_50 * 1_000_000);
+    expect(parsed.targetCurrency).toBe('EUR');
+  });
+
+  it('bez ceny nie zgaduje waluty', () => {
+    const parsed = parseRecommendation('Dom maklerski podtrzymuje rekomendację kupuj', null);
+    expect(parsed.targetPriceE8).toBeNull();
+    expect(parsed.targetCurrency).toBeNull();
+  });
+
+  it('nie łapie liczby, która nie jest wyceną', () => {
+    // Kurs i procenty w nagłówku nie są ceną docelową.
+    const parsed = parseRecommendation('Akcje spadły o 7% w ciągu 3 dni', null);
+    expect(parsed.targetPriceE8).toBeNull();
+  });
+});

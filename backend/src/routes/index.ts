@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
+import { accountsRouter } from './accounts.js';
 import { assistRouter } from './assist.js';
 import { analyticsRouter } from './analytics.js';
 import { authRouter } from './auth.js';
@@ -22,6 +23,7 @@ apiRouter.get('/health', (_req, res) => res.json({ ok: true }));
 apiRouter.use(requireAuth);
 apiRouter.use('/status', statusRouter);
 apiRouter.use('/portfolios', portfoliosRouter);
+apiRouter.use('/accounts', accountsRouter);
 apiRouter.use('/instruments', instrumentsRouter);
 apiRouter.use('/transactions', transactionsRouter);
 apiRouter.use('/positions', positionsRouter);

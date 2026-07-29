@@ -29,7 +29,11 @@ export function RatingsCard({ ratings }: { ratings: ResearchSnapshot['ratings'] 
             <Tile label="Konsensus" value={consensusLabel(ratings.scoreAvg)} hint={countsLabel(ratings.counts)} />
             <Tile
               label="Mediana ceny docelowej"
-              value={ratings.medianTargetE8 === null ? '—' : `${(ratings.medianTargetE8 / 1e8).toFixed(2)} zł`}
+              value={
+                ratings.medianTargetE8 === null
+                  ? '—'
+                  : `${(ratings.medianTargetE8 / 1e8).toFixed(2)} ${ratings.targetCurrency ?? ''}`.trim()
+              }
               hint={
                 ratings.medianTargetE8 === null
                   ? 'polskie serwisy rzadko podają kwotę w nagłówku'
@@ -60,7 +64,7 @@ export function RatingsCard({ ratings }: { ratings: ResearchSnapshot['ratings'] 
                   {entry.broker && <span className="font-medium">{entry.broker}</span>}
                   {entry.targetPriceE8 && (
                     <span className="tabular font-medium text-content-secondary">
-                      cel {(entry.targetPriceE8 / 1e8).toFixed(2)} zł
+                      cel {(entry.targetPriceE8 / 1e8).toFixed(2)} {entry.targetCurrency ?? 'PLN'}
                       {entry.direction === 'up' && ' ↑'}
                       {entry.direction === 'down' && ' ↓'}
                     </span>

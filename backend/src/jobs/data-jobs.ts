@@ -6,7 +6,7 @@ import { refreshDividendHistory } from '../services/corporate-actions.js';
 import { analyzePendingNews, fetchNews } from '../services/news.js';
 import { refreshAllRecommendations } from '../services/recommendations.js';
 import { refreshFxRates } from '../services/fx.js';
-import { instrumentsNeedingPrices, isMarketHours, refreshQuotes } from '../services/prices.js';
+import { backfillAllHistory, instrumentsNeedingPrices, isMarketHours, refreshQuotes } from '../services/prices.js';
 import type { ScheduleFn } from './index.js';
 
 /** Rejestracja zadań operujących na danych. Jeden punkt rozszerzania harmonogramu. */
@@ -52,4 +52,17 @@ export function registerDataJobs(schedule: ScheduleFn): void {
 
   // Zdarzenia korporacyjne zmieniają się rzadko — raz na dobę wystarczy.
   schedule('dividends:history', '40 23 * * *', config.cron.snapshot, async () => refreshDividendHistory());
+
+  /*
+   * Nocne uzupełnianie historii notowań.
+   *
+   * `refreshQuotes` dopisuje wyłącznie dzisiejszy dzień i tylko w godzinach
+   * sesji, więc każda przerwa w działaniu aplikacji zostawiała lukę, której
+   * nic potem nie zasypywało — a wskaźniki techniczne liczą się właśnie
+   * z tych świec. Funkcja istniała, ale nie była nigdzie wywoływana.
+   *
+   * Poza godzinami sesji, żeby nie konkurować o limity dostawcy z bieżącym
+   * odświeżaniem cen.
+   */
+  schedule('prices:backfill', '10 2 * * *', config.cron.prices, async () => backfillAllHistory());
 }

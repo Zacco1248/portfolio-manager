@@ -22,6 +22,36 @@ export function Research() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
+  const [adding, setAdding] = useState<string | null>(null);
+
+  /**
+   * Zakłada instrument z podpowiedzi dostawcy i otwiera jego kartę.
+   *
+   * Waluta i giełda idą z wyniku wyszukiwania, a nie z wartości domyślnych:
+   * `NOW` bez tych danych zostałby znormalizowany do `NOW.WA`, czyli
+   * nieistniejącego papieru na GPW zamiast ServiceNow z NYSE.
+   */
+  const addAndShow = async (item: { symbol: string; name: string; assetClass: string; exchange: string | null; currency?: string | null }) => {
+    setAdding(item.symbol);
+    setError(null);
+    try {
+      const created = await api.instruments.create({
+        symbol: item.symbol,
+        name: item.name,
+        assetClass: item.assetClass,
+        currency: item.currency ?? 'USD',
+        ...(item.exchange ? { exchange: item.exchange } : {}),
+      });
+      setResults((current) =>
+        current?.map((row) => (row.symbol === item.symbol && row.id === null ? { ...row, id: created.id, known: true } : row)) ?? null,
+      );
+      setSelected(created.id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Nie udało się dodać instrumentu');
+    } finally {
+      setAdding(null);
+    }
+  };
 
   const search = async () => {
     setSearching(true);
@@ -85,7 +115,19 @@ export function Research() {
                   </div>
                 </div>
                 {item.id === null ? (
-                  <span className="text-2xs text-content-muted">spoza bazy — dodaj jako instrument</span>
+                  /*
+                   * Wynik spoza bazy był wcześniej martwym napisem — ślepy
+                   * zaułek, bo karta spółki wymaga instrumentu z bazy.
+                   * Teraz zakładamy go tu i od razu przechodzimy do analizy.
+                   */
+                  <button
+                    type="button"
+                    className="btn text-2xs"
+                    disabled={adding === item.symbol}
+                    onClick={() => void addAndShow(item)}
+                  >
+                    {adding === item.symbol ? 'Dodaję…' : 'Dodaj i pokaż'}
+                  </button>
                 ) : (
                   <button
                     type="button"

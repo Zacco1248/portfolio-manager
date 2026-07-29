@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { getSetting } from './settings.js';
 import { errorMessage } from '../lib/errors.js';
 import { fetchJson } from '../lib/http-client.js';
 import { createLogger } from '../lib/logger.js';
@@ -18,7 +19,19 @@ export interface DeliveryResult {
   error: string | null;
 }
 
-export const isTelegramEnabled = (): boolean => config.telegram.enabled;
+/**
+ * Dane bota — z ustawień, a w razie ich braku z `.env`.
+ *
+ * Ten sam porządek co przy kluczach AI: `.env` czytany jest raz przy starcie,
+ * więc wpisanie tam tokenu wymagało restartu. Wartość z ustawień działa od razu.
+ */
+export function telegramCredentials(): { botToken: string; chatId: string } | null {
+  const botToken = (getSetting<string | null>('telegramBotToken', null) ?? config.telegram.botToken ?? '').trim();
+  const chatId = (getSetting<string | null>('telegramChatId', null) ?? config.telegram.chatId ?? '').trim();
+  return botToken && chatId ? { botToken, chatId } : null;
+}
+
+export const isTelegramEnabled = (): boolean => telegramCredentials() !== null;
 
 interface TelegramResponse {
   ok: boolean;
@@ -27,11 +40,12 @@ interface TelegramResponse {
 }
 
 export async function sendTelegramMessage(text: string): Promise<DeliveryResult> {
-  if (!config.telegram.enabled) {
+  const credentials = telegramCredentials();
+  if (!credentials) {
     return { delivered: false, error: 'Telegram nie jest skonfigurowany' };
   }
 
-  const url = `https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`;
+  const url = `https://api.telegram.org/bot${credentials.botToken}/sendMessage`;
 
   try {
     const response = await fetchJson<TelegramResponse>(url, {
@@ -40,7 +54,7 @@ export async function sendTelegramMessage(text: string): Promise<DeliveryResult>
       minIntervalMs: 1200,
       retries: 2,
       body: {
-        chat_id: config.telegram.chatId,
+        chat_id: credentials.chatId,
         text,
         parse_mode: 'HTML',
         disable_web_page_preview: true,
@@ -60,10 +74,10 @@ export async function sendTelegramMessage(text: string): Promise<DeliveryResult>
 
 /** Test połączenia — używany przez panel ustawień. */
 export async function testTelegram(): Promise<{ ok: boolean; message: string }> {
-  if (!config.telegram.enabled) {
+  if (!isTelegramEnabled()) {
     return {
       ok: false,
-      message: 'Brak TELEGRAM_BOT_TOKEN lub TELEGRAM_CHAT_ID w pliku .env — powiadomienia są wyłączone.',
+      message: 'Brak tokenu bota lub identyfikatora czatu — uzupełnij je w Ustawieniach.',
     };
   }
 

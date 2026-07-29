@@ -1,4 +1,4 @@
-import { shareBp } from '@portfolio/shared';
+import { rollUp, shareBp } from '@portfolio/shared';
 import type { Position, RiskWarning } from '@portfolio/shared';
 import { getSetting } from './settings.js';
 
@@ -31,7 +31,7 @@ export function detectConcentration(positions: Position[], thresholds: RiskThres
   // Pojedyncze spółki — ETF-y pomijamy, bo z definicji są koszykiem.
   const byInstrument = new Map<string, { value: number; name: string }>();
   for (const position of positions) {
-    if (position.instrument.assetClass !== 'stock') continue;
+    if (rollUp(position.instrument.assetClass) !== 'stock') continue;
     const key = position.instrument.symbol;
     const entry = byInstrument.get(key) ?? { value: 0, name: position.instrument.name };
     entry.value += position.valuePlnMinor;
@@ -86,7 +86,7 @@ export function detectEtfOverlap(
   thresholdBp: number,
 ): RiskWarning[] {
   const etfs = positions.filter(
-    (p) => p.instrument.assetClass === 'etf' && (holdingsByInstrument.get(p.instrument.id)?.length ?? 0) > 0,
+    (p) => rollUp(p.instrument.assetClass) === 'etf' && (holdingsByInstrument.get(p.instrument.id)?.length ?? 0) > 0,
   );
   if (etfs.length < 2) return [];
 

@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import {
+  ASSET_CLASS_CHILDREN,
+  ASSET_CLASS_GROUP_LABELS,
+  ASSET_CLASS_GROUPS,
+  ASSET_CLASS_LABELS,
+} from '@portfolio/shared';
 import type { RiskWarning } from '@portfolio/shared';
 import { formatPercent, formatPln, toneClass } from '@/lib/format';
 
@@ -194,6 +200,59 @@ export function Field({ label, children, hint }: { label: string; children: Reac
       {children}
       {hint && <span className="mt-1 block text-2xs text-content-muted">{hint}</span>}
     </label>
+  );
+}
+
+/**
+ * Select klasy aktywów z hierarchią.
+ *
+ * Akcje i ETF-y są rozbite na krajowe i zagraniczne, ale nadal sumują się do
+ * grupy nadrzędnej. `allowGroups` decyduje, czy sama grupa jest wybieralna:
+ * przy celach alokacji tak (cel „60% akcji" ma sens), przy klasyfikacji
+ * instrumentu nie — do bazy wolno zapisać wyłącznie liść.
+ */
+export function AssetClassSelect({
+  value,
+  onChange,
+  allowGroups = false,
+  allowAll = false,
+  className = 'input',
+  ...rest
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  allowGroups?: boolean;
+  allowAll?: boolean;
+  className?: string;
+} & Omit<React.SelectHTMLAttributes<HTMLSelectElement>, 'value' | 'onChange' | 'className'>) {
+  return (
+    <select className={className} value={value} onChange={(e) => onChange(e.target.value)} {...rest}>
+      {allowAll && <option value="all">Wszystkie klasy</option>}
+      {ASSET_CLASS_GROUPS.map((group) => {
+        const children = ASSET_CLASS_CHILDREN[group];
+
+        // Grupa jednoelementowa (obligacje, metale, krypto, gotówka) nie
+        // potrzebuje nagłówka nad jednym wpisem.
+        if (children.length === 1) {
+          return (
+            <option key={group} value={children[0]}>
+              {ASSET_CLASS_GROUP_LABELS[group]}
+            </option>
+          );
+        }
+
+        return (
+          <optgroup key={group} label={ASSET_CLASS_GROUP_LABELS[group]}>
+            {allowGroups && <option value={group}>{ASSET_CLASS_GROUP_LABELS[group]} — łącznie</option>}
+            {children.map((child) => (
+              <option key={child} value={child}>
+                {ASSET_CLASS_LABELS[child]}
+              </option>
+            ))}
+          </optgroup>
+        );
+      })}
+    </select>
   );
 }
 

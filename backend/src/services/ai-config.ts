@@ -20,6 +20,9 @@ export type AiProvider = (typeof AI_PROVIDERS)[number];
 export const AI_FEATURES = [
   'news',
   'insights',
+  'sessionSummary',
+  'quickQuestion',
+  'analystConsensus',
   'rebalanceHints',
   'monthlySummary',
   'priceMoves',
@@ -40,6 +43,35 @@ export interface AiFeatureInfo {
 }
 
 export const AI_FEATURE_INFO: Record<AiFeature, AiFeatureInfo> = {
+  analystConsensus: {
+    key: 'analystConsensus',
+    label: 'Konsensus analityków',
+    dataSent: 'Wyłącznie symbol spółki, wysyłany do Yahoo Finance. Żadne dane portfela nie opuszczają serwera.',
+    description:
+      'Pobiera prawdziwe ceny docelowe i rozkład zaleceń analityków z Yahoo Finance — także dla spółek ' +
+      'zagranicznych, dla których odczyt z polskich nagłówków prasowych nie działa. Korzysta z ' +
+      'nieudokumentowanego mechanizmu, więc przy zmianie po stronie Yahoo wraca do odczytu z nagłówków.',
+  },
+  quickQuestion: {
+    key: 'quickQuestion',
+    label: 'Szybkie pytanie',
+    dataSent:
+      'Treść pytania oraz skrót portfela: symbole, nazwy, udziały, wyniki procentowe, klasy aktywów, ' +
+      'sektory i regiony. Bez kwot pozycji, bez salda i bez historii transakcji.',
+    description:
+      'Pytanie własnymi słowami o portfel — na przykład o skutki zamiany jednej pozycji na inną. ' +
+      'Model odpowiada wyłącznie na podstawie struktury portfela i nie wydaje zaleceń kupna ani sprzedaży.',
+  },
+  sessionSummary: {
+    key: 'sessionSummary',
+    label: 'Podsumowanie sesji',
+    dataSent:
+      'Symbole i nazwy spółek z portfela, ich zmiany dzienne, udziały w portfelu oraz tytuły wiadomości ' +
+      'z ostatniej doby. Bez kwot pozycji i bez salda.',
+    description:
+      'Jednym akapitem opisuje, co działo się w ostatniej dobie na spółkach z portfela — kto najbardziej ' +
+      'się ruszył i czy stoją za tym jakieś wiadomości.',
+  },
   news: {
     key: 'news',
     label: 'Streszczenia wiadomości',
@@ -146,6 +178,9 @@ export interface AiSettings {
 const DEFAULT_FEATURES: Record<AiFeature, boolean> = {
   news: false,
   insights: false,
+  sessionSummary: false,
+  quickQuestion: false,
+  analystConsensus: false,
   rebalanceHints: false,
   monthlySummary: false,
   priceMoves: false,
@@ -191,9 +226,62 @@ export function updateAiSettings(patch: AiSettingsPatch): AiSettings {
   return getAiSettings();
 }
 
-/** Klucz dla wskazanego dostawcy; null, gdy nie ustawiono go w `.env`. */
+/** Klucze zapisane z poziomu ustawień. Nigdy nie opuszczają serwera w całości. */
+const KEY_SETTING: Record<AiProvider, string> = {
+  anthropic: 'anthropicApiKey',
+  openai: 'openAiApiKey',
+};
+
+/**
+ * Klucz dla wskazanego dostawcy.
+ *
+ * Ustawienia mają pierwszeństwo przed `.env` — tak samo jak model i dostawca.
+ * Plik `.env` czytany jest raz przy starcie procesu, więc wpisanie tam klucza
+ * wymagało restartu; klucz z ustawień działa od razu.
+ */
 export function apiKeyFor(provider: AiProvider): string | null {
+  const stored = getSetting<string | null>(KEY_SETTING[provider], null);
+  if (stored && stored.trim()) return stored.trim();
+
   return provider === 'openai' ? (config.ai.openAiKey ?? null) : (config.ai.apiKey ?? null);
+}
+
+/** Skąd pochodzi aktualnie używany klucz — do pokazania w ustawieniach. */
+export function apiKeySource(provider: AiProvider): 'settings' | 'env' | null {
+  const stored = getSetting<string | null>(KEY_SETTING[provider], null);
+  if (stored && stored.trim()) return 'settings';
+  const fromEnv = provider === 'openai' ? config.ai.openAiKey : config.ai.apiKey;
+  return fromEnv ? 'env' : null;
+}
+
+/**
+ * Zapisuje albo czyści klucz dostawcy.
+ *
+ * Pusta wartość usuwa wpis z ustawień i przywraca ewentualny klucz z `.env` —
+ * dzięki temu da się wycofać zmianę bez grzebania w bazie.
+ */
+export function setApiKey(provider: AiProvider, key: string | null): void {
+  setSetting(KEY_SETTING[provider], key && key.trim() ? key.trim() : null);
+  // Klient dostawcy trzyma klucz w domknięciu, więc bez zrzucenia go
+  // pierwsze zapytanie po zmianie poleciałoby na starym.
+  resetAiClients();
+}
+
+/**
+ * Maska klucza do pokazania w interfejsie: początek, koniec i nic pomiędzy.
+ * Wystarcza, żeby rozpoznać, który klucz jest wpisany, i nie ujawnia go.
+ */
+export function maskApiKey(key: string | null): string | null {
+  if (!key) return null;
+  if (key.length <= 12) return `${key.slice(0, 3)}…`;
+  return `${key.slice(0, 7)}…${key.slice(-4)}`;
+}
+
+/** Ustawiane przez `ai.ts` — pozwala zrzucić zapamiętanego klienta po zmianie klucza. */
+let resetAiClients: () => void = () => undefined;
+
+export function onApiKeyChange(reset: () => void): void {
+  resetAiClients = reset;
 }
 
 export interface AiAvailability {
@@ -202,6 +290,15 @@ export interface AiAvailability {
   reason: string | null;
 }
 
+/**
+ * Funkcje, które nie wołają modelu językowego.
+ *
+ * Korzystają z tego samego mechanizmu zgód, bo też wysyłają coś na zewnątrz,
+ * ale wymaganie od nich klucza dostawcy modelu byłoby bez sensu — nie mają
+ * z niego jak skorzystać.
+ */
+const FEATURES_WITHOUT_MODEL: readonly AiFeature[] = ['analystConsensus'];
+
 export function checkFeature(feature: AiFeature): AiAvailability {
   const settings = getAiSettings();
 
@@ -209,9 +306,16 @@ export function checkFeature(feature: AiFeature): AiAvailability {
     return { enabled: false, reason: `Funkcja „${AI_FEATURE_INFO[feature].label}" jest wyłączona w ustawieniach.` };
   }
 
+  if (FEATURES_WITHOUT_MODEL.includes(feature)) return { enabled: true, reason: null };
+
   if (!apiKeyFor(settings.provider)) {
-    const variable = settings.provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY';
-    return { enabled: false, reason: `Brak ${variable} w pliku .env.` };
+    const label = settings.provider === 'openai' ? 'OpenAI' : 'Anthropic';
+    // Komunikat mówi wprost o wybranym dostawcy: przy `aiProvider = openai`
+    // i kluczu Anthropic w `.env` samo „brak klucza" bywało mylące.
+    return {
+      enabled: false,
+      reason: `Brak klucza ${label} — wpisz go w Ustawieniach (dostawca: ${label}).`,
+    };
   }
 
   return { enabled: true, reason: null };
@@ -230,8 +334,12 @@ export function aiStatus() {
       reason: checkFeature(feature).reason,
     })),
     keys: {
-      anthropic: Boolean(config.ai.apiKey),
-      openai: Boolean(config.ai.openAiKey),
+      anthropic: Boolean(apiKeyFor('anthropic')),
+      openai: Boolean(apiKeyFor('openai')),
+      anthropicMasked: maskApiKey(apiKeyFor('anthropic')),
+      openaiMasked: maskApiKey(apiKeyFor('openai')),
+      anthropicSource: apiKeySource('anthropic'),
+      openaiSource: apiKeySource('openai'),
     },
     suggestedModels: SUGGESTED_MODELS,
   };

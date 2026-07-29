@@ -1,4 +1,5 @@
 import { and, asc, eq, gte, inArray, lte } from 'drizzle-orm';
+import { toGroupKey } from '@portfolio/shared';
 import type { SnapshotPoint } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
@@ -131,10 +132,23 @@ export function readHistory(portfolioIds: number[], from?: IsoDate, to?: IsoDate
   return out;
 }
 
+/**
+ * Scala rozbicie na klasy aktywów, zwijając klucze do poziomu grupy.
+ *
+ * Snapshot jest zapisem pomiaru z konkretnego dnia i nigdy go nie przepisujemy,
+ * więc w bazie leżą obok siebie dwie ery: sprzed rozbicia klas (klucz `stock`)
+ * i po nim (`stock_pl`, `stock_foreign`). Bez zwinięcia wykres historii
+ * pokazywałby w dniu migracji zniknięcie serii „Akcje" i nagłe pojawienie się
+ * dwóch nowych — zmianę sposobu liczenia wziętą za zmianę portfela.
+ *
+ * Stąd reguła: historia rysowana na poziomie grup, bieżąca alokacja na
+ * poziomie liści.
+ */
 function mergeAssetClasses(point: SnapshotPoint, source: Record<string, number> | null): void {
   if (!source) return;
   const target = (point.byAssetClass ?? {}) as Record<string, number>;
-  for (const [key, value] of Object.entries(source)) {
+  for (const [rawKey, value] of Object.entries(source)) {
+    const key = toGroupKey(rawKey);
     target[key] = (target[key] ?? 0) + value;
   }
   point.byAssetClass = target as SnapshotPoint['byAssetClass'];

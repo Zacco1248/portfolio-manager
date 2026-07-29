@@ -240,6 +240,14 @@ export interface TechnicalState {
   /** Odległość od maksimum i minimum z roku, w procentach. */
   fromYearHighPercent: number | null;
   fromYearLowPercent: number | null;
+  /**
+   * Data świecy, z której pochodzą powyższe wartości.
+   *
+   * `lastDefined` cofa się do ostatniego niepustego odczytu niezależnie od
+   * tego, jak stary jest — bez tej daty interfejs pokazywał RSI sprzed roku
+   * dokładnie tak samo jak dzisiejszy.
+   */
+  asOf: string | null;
 }
 
 /**
@@ -262,6 +270,7 @@ export function currentState(indicators: TechnicalIndicators, candles: Candle[] 
   const rsiNow = lastDefined(indicators.rsi14);
   const sma50 = lastDefined(indicators.sma50);
   const sma200 = lastDefined(indicators.sma200);
+  const asOf = candles.length > 0 ? (candles[candles.length - 1]?.date ?? null) : null;
 
   const close = candles.length > 0 ? candles[candles.length - 1]!.closeE8 : null;
   const atrNow = lastDefined(indicators.atr14);
@@ -301,6 +310,7 @@ export function currentState(indicators: TechnicalIndicators, candles: Candle[] 
     momentum20: lastDefined(indicators.roc20),
     fromYearHighPercent: yearHigh !== null && close !== null && yearHigh > 0 ? ((close - yearHigh) / yearHigh) * 100 : null,
     fromYearLowPercent: yearLow !== null && close !== null && yearLow > 0 ? ((close - yearLow) / yearLow) * 100 : null,
+    asOf,
   };
 }
 

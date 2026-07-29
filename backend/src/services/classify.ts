@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
-import type { AssetClass } from '@portfolio/shared';
+import { equityClassFor, toGroupKey } from '@portfolio/shared';
+import type { AssetClass, AssetClassGroup } from '@portfolio/shared';
 import { db } from '../db/index.js';
 import { instruments } from '../db/schema.js';
 import type { InstrumentRow } from '../db/schema.js';
@@ -34,8 +35,14 @@ interface SearchResponse {
   quotes?: { symbol?: string; quoteType?: string; sector?: string; industry?: string; longname?: string }[];
 }
 
-/** Typ instrumentu u dostawcy → nasza klasa aktywów. */
-function assetClassFrom(instrumentType: string | undefined): AssetClass | null {
+/**
+ * Typ instrumentu u dostawcy → GRUPA klasy aktywów.
+ *
+ * Świadomie grupa, nie liść: dostawca rozstrzyga wyłącznie oś akcje/fundusz.
+ * O tym, czy papier jest krajowy, decyduje `equityClassFor` na podstawie
+ * rynku notowania — tej wiedzy Yahoo nam nie poda.
+ */
+function assetClassFrom(instrumentType: string | undefined): AssetClassGroup | null {
   switch (instrumentType?.toUpperCase()) {
     case 'ETF':
     case 'MUTUALFUND':
@@ -123,7 +130,7 @@ const EXCHANGE_COUNTRIES: Record<string, string> = {
 };
 
 /** Klasy aktywów, dla których sektor i kraj wynikają z samej klasy. */
-const CLASS_DEFAULTS: Partial<Record<AssetClass, { sector: string; country?: string }>> = {
+const CLASS_DEFAULTS: Partial<Record<AssetClassGroup, { sector: string; country?: string }>> = {
   bond: { sector: 'Obligacje skarbowe', country: 'Polska' },
   metal: { sector: 'Metale szlachetne', country: 'Świat' },
   crypto: { sector: 'Kryptowaluty', country: 'Świat' },
@@ -161,6 +168,74 @@ const FUND_REGIONS: { match: RegExp; region: string }[] = [
   { match: /pacific|asia|azja/i, region: 'Azja i Pacyfik' },
 ];
 
+/**
+ * Ekspozycja popularnych ETF-ów UCITS rozpoznawana po samym tickerze.
+ *
+ * Regexy na nazwie zawodzą wtedy, gdy nazwy nie ma: import z wyciągu brokera
+ * potrafi zostawić samo „IUIT", a wtedy jedyną przesłanką zostawał rynek
+ * notowania — i fundusz na amerykański sektor technologiczny lądował
+ * w „Wielkiej Brytanii", bo jest notowany w Londynie.
+ *
+ * Lista jest pomocnicza, nie kompletna: obejmuje fundusze najczęściej
+ * kupowane z Polski. Nietrafiony ticker spada do rozpoznawania po nazwie,
+ * a ostatecznie do kraju notowania — tak jak wcześniej.
+ */
+const ETF_EXPOSURE: Record<string, { region: string; sector?: string }> = {
+  // S&P 500 i szeroki rynek USA
+  VUAA: { region: 'USA' },
+  VUSA: { region: 'USA' },
+  CSPX: { region: 'USA' },
+  SXR8: { region: 'USA' },
+  IUSA: { region: 'USA' },
+  VOO: { region: 'USA' },
+  SPY: { region: 'USA' },
+  // Nasdaq 100
+  CNDX: { region: 'USA' },
+  EQQQ: { region: 'USA' },
+  QQQ: { region: 'USA' },
+  // Sektorowe na rynek amerykański
+  IUIT: { region: 'USA', sector: 'Technologia' },
+  IITU: { region: 'USA', sector: 'Technologia' },
+  IUHC: { region: 'USA', sector: 'Ochrona zdrowia' },
+  IUFS: { region: 'USA', sector: 'Finanse' },
+  // Świat
+  SWDA: { region: 'Świat' },
+  IWDA: { region: 'Świat' },
+  EUNL: { region: 'Świat' },
+  VWCE: { region: 'Świat' },
+  VWRA: { region: 'Świat' },
+  VWRL: { region: 'Świat' },
+  ISAC: { region: 'Świat' },
+  IUSQ: { region: 'Świat' },
+  ACWI: { region: 'Świat' },
+  // Rynki wschodzące
+  EIMI: { region: 'Rynki wschodzące' },
+  EMIM: { region: 'Rynki wschodzące' },
+  IEMA: { region: 'Rynki wschodzące' },
+  VFEM: { region: 'Rynki wschodzące' },
+  VFEA: { region: 'Rynki wschodzące' },
+  // Europa
+  MEUD: { region: 'Europa' },
+  CEUU: { region: 'Europa' },
+  EXSA: { region: 'Europa' },
+  IMEU: { region: 'Europa' },
+  // Polska
+  ETFBW20TR: { region: 'Polska' },
+  ETFBM40TR: { region: 'Polska' },
+  ETFBS80TR: { region: 'Polska' },
+  BETAW20LV: { region: 'Polska' },
+};
+
+/** Sam ticker, bez prefiksu rynku i sufiksu giełdy: `LON:IUIT` → `IUIT`. */
+function bareTicker(symbol: string): string {
+  return (symbol.split(':').pop() ?? symbol).split('.')[0]!.toUpperCase();
+}
+
+/** Ekspozycja funduszu rozpoznana po tickerze — pewniejsza niż zgadywanie z nazwy. */
+export function etfExposure(symbol: string): { region: string; sector?: string } | null {
+  return ETF_EXPOSURE[bareTicker(symbol)] ?? null;
+}
+
 export function fundRegion(name: string): string | null {
   return FUND_REGIONS.find((entry) => entry.match.test(name))?.region ?? null;
 }
@@ -171,12 +246,18 @@ export function localClassification(instrument: {
   exchange: string | null;
   assetClass: string;
 }): { sector: string | null; country: string | null } {
-  const defaults = CLASS_DEFAULTS[instrument.assetClass as AssetClass];
+  const group = toGroupKey(instrument.assetClass);
+  const defaults = CLASS_DEFAULTS[group as AssetClassGroup];
 
   // Dla funduszu liczy się to, w co inwestuje, a nie gdzie jest notowany.
-  if (instrument.assetClass === 'etf') {
+  if (group === 'etf') {
+    // Najpierw ticker: rozpoznanie jest pewne i działa nawet wtedy, gdy import
+    // nie przyniósł nazwy funduszu.
+    const known = etfExposure(instrument.symbol);
+    if (known) return { sector: known.sector ?? FUND_SECTOR, country: known.region };
+
     const region = fundRegion(`${instrument.name ?? ''} ${instrument.symbol}`);
-    if (region) return { sector: 'Fundusze (wiele sektorów)', country: region };
+    if (region) return { sector: FUND_SECTOR, country: region };
   }
 
   const codes = [
@@ -193,7 +274,8 @@ export function localClassification(instrument: {
 }
 
 export interface Classification {
-  assetClass: AssetClass | null;
+  /** Grupa, nie liść — oś krajowa jest nasza, nie dostawcy. */
+  assetClass: AssetClassGroup | null;
   sector: string | null;
   name: string | null;
 }
@@ -203,7 +285,7 @@ export async function classifyInstrument(instrument: InstrumentRow): Promise<Cla
   if (!symbol) return { assetClass: null, sector: null, name: null };
 
   const headers = { Accept: 'application/json' };
-  let assetClass: AssetClass | null = null;
+  let assetClass: AssetClassGroup | null = null;
   let name: string | null = null;
 
   try {
@@ -237,9 +319,22 @@ export async function classifyInstrument(instrument: InstrumentRow): Promise<Cla
     log.debug(`Sektor ${symbol} nieosiągalny: ${errorMessage(err)}`);
   }
 
-  if (sector === null && (assetClass ?? instrument.assetClass) === 'etf') sector = FUND_SECTOR;
+  if (sector === null && (assetClass ?? toGroupKey(instrument.assetClass)) === 'etf') sector = FUND_SECTOR;
 
   return { assetClass, sector, name };
+}
+
+/**
+ * Łączy odpowiedź dostawcy z tym, co wiemy o rynku notowania.
+ *
+ * Dostawca zwraca grupę („to jest ETF"), my domykamy ją osią krajową
+ * („notowany w Londynie, więc zagraniczny"). Grupy jednoelementowe
+ * (krypto, metale) są zarazem liśćmi i przechodzą wprost.
+ */
+function mergeClass(row: InstrumentRow, provider: AssetClassGroup | null): AssetClass | null {
+  if (provider === null) return null;
+  if (provider === 'stock' || provider === 'etf') return equityClassFor(provider, row);
+  return provider as AssetClass;
 }
 
 export interface ClassifyResult {
@@ -271,9 +366,20 @@ export async function classifyAll(options: { force?: boolean } = {}): Promise<Cl
 
     // Funduszom przypisanym wcześniej do kraju notowania podmieniamy kraj na
     // region ekspozycji — inaczej ETF na S&P 500 zostałby „Irlandią".
-    if (row.assetClass === 'etf' && row.country && local.country && row.country !== local.country) {
+    if (toGroupKey(row.assetClass) === 'etf' && row.country && local.country && row.country !== local.country) {
       const wasExchangeGuess = Object.values(EXCHANGE_COUNTRIES).includes(row.country);
       if (wasExchangeGuess) localPatch.country = local.country;
+    }
+
+    /*
+     * Fundusz sektorowy o rozpoznanym tickerze dostaje swój sektor zamiast
+     * zbiorczej kategorii „Fundusze (wiele sektorów)". To wiedza pewniejsza
+     * niż zapisany wcześniej domysł, więc nadpisujemy — ale tylko wtedy, gdy
+     * dotychczasowa wartość była właśnie tą zbiorczą etykietą.
+     */
+    const exposure = toGroupKey(row.assetClass) === 'etf' ? etfExposure(row.symbol) : null;
+    if (exposure?.sector && (!row.sector || row.sector === FUND_SECTOR)) {
+      localPatch.sector = exposure.sector;
     }
     if (Object.keys(localPatch).length > 0) {
       db.update(instruments).set(localPatch).where(eq(instruments.id, row.id)).run();
@@ -286,7 +392,13 @@ export async function classifyAll(options: { force?: boolean } = {}): Promise<Cl
     if (row.assetClass === 'bond') continue;
 
     const needsSector = !row.sector;
-    const needsClass = row.assetClass === 'stock' || options.force === true;
+    /*
+     * Reklasyfikacja dotyczy papierów, które trafiły do bazy jako akcje —
+     * to jedyna droga, żeby ETF zaimportowany z arkusza jako „Akcje
+     * zagraniczne" został poprawiony na fundusz. Porównanie musi iść po
+     * grupie: po rozbiciu klas żaden instrument nie ma już wartości 'stock'.
+     */
+    const needsClass = toGroupKey(row.assetClass) === 'stock' || options.force === true;
     if (!needsSector && !needsClass) continue;
 
     result.checked += 1;
@@ -294,16 +406,31 @@ export async function classifyAll(options: { force?: boolean } = {}): Promise<Cl
 
     const patch: Partial<InstrumentRow> = {};
 
-    if (classification.assetClass && classification.assetClass !== row.assetClass) {
-      patch.assetClass = classification.assetClass;
-      result.changes.push({
-        symbol: row.symbol,
-        from: row.assetClass,
-        to: classification.assetClass,
-      });
+    /*
+     * Dostawca rozstrzyga tylko oś akcje/fundusz. Oś krajowa jest nasza —
+     * wynika z rynku notowania. Płaskie nadpisanie wpisałoby do bazy wartość
+     * grupową ('etf'), której schemat nie dopuszcza.
+     */
+    const merged = mergeClass(row, classification.assetClass);
+    if (merged && merged !== row.assetClass) {
+      patch.assetClass = merged;
+      result.changes.push({ symbol: row.symbol, from: row.assetClass, to: merged });
     }
 
     if (needsSector && classification.sector) patch.sector = classification.sector;
+
+    /*
+     * Papier, który dopiero teraz okazał się funduszem, dostał wcześniej kraj
+     * notowania — bo przy klasyfikacji lokalnej uchodził jeszcze za akcję.
+     * Przeliczamy go od razu, zamiast czekać na kolejne uruchomienie: inaczej
+     * ETF na S&P 500 kupiony w Londynie zostawał „Wielką Brytanią" aż do
+     * drugiego przebiegu.
+     */
+    if (patch.assetClass && toGroupKey(patch.assetClass) === 'etf') {
+      const asFund = localClassification({ ...row, assetClass: patch.assetClass, name: patch.name ?? row.name });
+      if (asFund.country && asFund.country !== row.country) patch.country = asFund.country;
+      if (asFund.sector) patch.sector = asFund.sector;
+    }
 
     // Importy XTB nie mają nazw instrumentów — uzupełniamy z dostawcy.
     if (classification.name && (row.name === row.symbol.split(':').pop() || row.name === row.symbol)) {

@@ -15,6 +15,7 @@ import { createLogger } from '../lib/logger.js';
 import { detectParser, parserById } from '../parsers/registry.js';
 import type { ColumnMapping, ParsedBond, ParsedRow } from '../parsers/types.js';
 import { parserAliasSource } from '../parsers/types.js';
+import { resolveAccountByName } from './accounts.js';
 import { resolveInstrument } from './instruments.js';
 import { importSnapshots } from './snapshots.js';
 import { upsertCpi } from './bonds.js';
@@ -126,9 +127,21 @@ export async function previewImport(options: PreviewOptions): Promise<ImportPrev
         }
       }
 
+      /*
+       * Konto zakładamy w locie, tak jak instrument: konto bez transakcji jest
+       * nieszkodliwe, a użytkownik i tak zatwierdza wiersze osobno. Nazwa idzie
+       * wprost ze źródła („XTB", „PKO"), więc powtórny import trafia w to samo
+       * konto zamiast tworzyć duplikat.
+       *
+       * Konto NIE wchodzi do `hashRow` ani do `dedupeKey` — dzięki temu
+       * dołożenie tej kolumny nie unieważnia wcześniejszych importów.
+       */
+      const accountId = row.account ? (resolveAccountByName(row.account)?.id ?? null) : null;
+
       const input: TransactionCreateInput & { rowHash: string } = {
         portfolioId: options.portfolioId,
         instrumentId: instrumentId ?? undefined,
+        accountId: accountId ?? undefined,
         type: row.type,
         tradeDate: row.tradeDate,
         quantity: row.quantity,

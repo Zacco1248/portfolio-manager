@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link } from 'react-router-dom';
 import { AiDisclaimer, AiPending, Card, ErrorBanner, Spinner } from '@/components/ui';
@@ -5,6 +6,9 @@ import { api } from '@/lib/api';
 import { formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
 import { usePortfolioParam } from '@/state/app';
+
+/** Horyzonty projekcji dostępne w interfejsie. */
+const PROJECTION_HORIZONS = [3, 5, 10, 15, 20, 30] as const;
 
 const KIND_STYLE: Record<string, { icon: string; className: string }> = {
   achievement: { icon: '✓', className: 'border-gain/40 bg-gain/5' },
@@ -23,7 +27,11 @@ const KIND_STYLE: Record<string, { icon: string; className: string }> = {
  */
 export function Insights() {
   const portfolioId = usePortfolioParam();
-  const { data, error, loading, reload } = useAsync(() => api.insights.get(portfolioId), [portfolioId]);
+  const [years, setYears] = useState(5);
+  const { data, error, loading, reload } = useAsync(
+    () => api.insights.get(portfolioId, years),
+    [portfolioId, years],
+  );
 
   // Komentarz modelu leci osobno i nie wstrzymuje liczb — patrz AiPending.
   const narrative = useAsync(() => api.insights.narrative(portfolioId), [portfolioId]);
@@ -81,7 +89,27 @@ export function Insights() {
         })}
       </div>
 
-      <Card title="Gdzie będziesz za 5 lat przy tym tempie">
+      <Card
+        title={`Gdzie będziesz za ${years} ${years === 1 ? 'rok' : years < 5 ? 'lata' : 'lat'} przy tym tempie`}
+        action={
+          <div className="flex gap-1">
+            {PROJECTION_HORIZONS.map((horizon) => (
+              <button
+                key={horizon}
+                type="button"
+                className={`rounded px-2 py-0.5 text-2xs transition-colors ${
+                  horizon === years
+                    ? 'bg-accent/15 font-medium text-accent'
+                    : 'text-content-muted hover:text-content-primary'
+                }`}
+                onClick={() => setYears(horizon)}
+              >
+                {horizon} l.
+              </button>
+            ))}
+          </div>
+        }
+      >
         <div className="grid gap-3 p-4 pt-2 sm:grid-cols-4">
           <Stat label="Miesięczna wpłata" value={formatPln(projection.monthlyContributionPlnMinor)} />
           <Stat
@@ -89,7 +117,7 @@ export function Insights() {
             value={formatPercent(projection.assumedAnnualReturnBp)}
             hint={projection.returnSource === 'xirr' ? 'z Twojego XIRR' : 'wartość domyślna'}
           />
-          <Stat label="Wartość za 5 lat" value={last ? formatPln(last.valuePlnMinor) : '—'} highlight />
+          <Stat label={`Wartość za ${years} lat`} value={last ? formatPln(last.valuePlnMinor) : '—'} highlight />
           <Stat label="W tym z procentu składanego" value={formatPln(growth)} />
         </div>
 

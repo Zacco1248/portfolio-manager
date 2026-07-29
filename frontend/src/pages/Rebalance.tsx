@@ -1,7 +1,19 @@
 import { useState } from 'react';
-import { ALLOCATION_DIMENSION_LABELS, ASSET_CLASS_LABELS } from '@portfolio/shared';
+import { ALLOCATION_DIMENSION_LABELS, assetClassLabel } from '@portfolio/shared';
 import type { AllocationDimension, RebalancePlan } from '@portfolio/shared';
-import { AiDisclaimer, AiPending, Card, DataTable, ErrorBanner, Field, Spinner, Toast, WarningList, useToast } from '@/components/ui';
+import {
+  AiDisclaimer,
+  AiPending,
+  AssetClassSelect,
+  Card,
+  DataTable,
+  ErrorBanner,
+  Field,
+  Spinner,
+  Toast,
+  WarningList,
+  useToast,
+} from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
 import { formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
@@ -234,13 +246,9 @@ function TargetsEditor({
       <div className="flex flex-wrap items-end gap-2 p-4 pt-2">
         <div className="w-40">
           <Field label="Klasa aktywów">
-            <select className="input" value={key} onChange={(e) => setKey(e.target.value)}>
-              {Object.entries(ASSET_CLASS_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
+            {/* Cel wolno ustawić na grupie („60% akcji") albo na liściu
+                („35% akcji polskich") — wartość grupy sumuje dzieci. */}
+            <AssetClassSelect value={key} onChange={setKey} allowGroups />
           </Field>
         </div>
         <div className="w-28">
@@ -262,7 +270,7 @@ function TargetsEditor({
         <ul className="divide-y divide-surface-border border-t border-surface-border">
           {assetTargets.map((entry) => (
             <li key={entry.id} className="flex items-center gap-3 px-4 py-2 text-sm">
-              <span className="flex-1">{ASSET_CLASS_LABELS[entry.key as keyof typeof ASSET_CLASS_LABELS] ?? entry.key}</span>
+              <span className="flex-1">{assetClassLabel(entry.key)}</span>
               <span className="tabular">{formatPercent(entry.targetBp, { digits: 1 })}</span>
               <span className="tabular text-2xs text-content-muted">±{(entry.toleranceBp / 100).toFixed(0)}%</span>
               <span className="text-2xs text-content-muted">{entry.portfolioId === null ? 'wszystkie portfele' : 'ten portfel'}</span>

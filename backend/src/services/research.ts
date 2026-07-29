@@ -7,13 +7,16 @@ import { instruments, newsItems, pricesDaily } from '../db/schema.js';
 import type { InstrumentRow } from '../db/schema.js';
 import { addDays, today } from '../lib/dates.js';
 import { errorMessage } from '../lib/errors.js';
-import { createLogger } from '../lib/logger.js';
+import { fetchAnalystSummary } from '../providers/yahoo-summary.js';
+import { toYahooSymbol } from '../providers/yahoo.js';
 import { checkFeature } from './ai-config.js';
+import { toProviderInstrument } from './prices.js';
+import { createLogger } from '../lib/logger.js';
 import { completeWithMeta, estimateCostMicroUsd } from './ai.js';
 import { activePortfolioIds, buildPositions, toInstrumentDto } from './positions.js';
 import { ratingConsensus, fetchRecommendations } from './recommendations.js';
 import type { RatingConsensus } from './recommendations.js';
-import { backfillInstrumentHistory } from './prices.js';
+import { backfillInstrumentHistory, historyNeedsRefresh } from './prices.js';
 import { computeIndicators, currentState, detectSignals } from './technical.js';
 import type { TechnicalState } from './technical.js';
 
@@ -49,20 +52,41 @@ const CHANGE_WINDOWS = [1, 7, 30, 90, 365];
 /**
  * Wyszukiwanie spółki po symbolu lub nazwie.
  *
- * Szuka najpierw wśród instrumentów już znanych aplikacji, bo zwykle o nie
- * chodzi; dopiero brak trafienia uzasadnia pytanie dostawcy.
+ * Instrumenty znane aplikacji idą na początek listy, ale nie zastępują
+ * odpowiedzi dostawcy. Wcześniej pierwsze lokalne trafienie zwierało obwód
+ * i w ogóle nie pytaliśmy Yahoo — przez co „Service now" gubiło ServiceNow,
+ * jeśli w bazie było cokolwiek zawierającego „now" (choćby „Snowflake"
+ * albo spółka z „Nowa" w nazwie).
+ *
+ * Dopasowanie lokalne trzyma się granicy słowa z tego samego powodu.
  */
 export async function searchCompanies(query: string): Promise<
-  { id: number | null; symbol: string; name: string; assetClass: string; exchange: string | null; known: boolean }[]
+  {
+    id: number | null;
+    symbol: string;
+    name: string;
+    assetClass: string;
+    exchange: string | null;
+    currency?: string | null;
+    known: boolean;
+  }[]
 > {
   const needle = query.trim().toLowerCase();
   if (needle.length < 2) return [];
+
+  const matchesLocally = (value: string): boolean => {
+    const haystack = value.toLowerCase();
+    if (haystack.startsWith(needle)) return true;
+    // Granica słowa: „now" ma trafiać w „ServiceNow" i „NOW Inc", ale nie
+    // w środek „Snowflake".
+    return new RegExp(`(^|[^a-z0-9])${escapeRegExp(needle)}`, 'i').test(haystack);
+  };
 
   const local = db
     .select()
     .from(instruments)
     .all()
-    .filter((row) => row.symbol.toLowerCase().includes(needle) || row.name.toLowerCase().includes(needle))
+    .filter((row) => matchesLocally(row.symbol) || matchesLocally(row.name))
     .slice(0, 10)
     .map((row) => ({
       id: row.id,
@@ -70,26 +94,39 @@ export async function searchCompanies(query: string): Promise<
       name: row.name,
       assetClass: row.assetClass,
       exchange: row.exchange,
+      currency: row.currency,
       known: true,
     }));
-
-  if (local.length > 0) return local;
 
   try {
     const { suggestSymbols } = await import('./instruments.js');
     const remote = await suggestSymbols(query);
-    return remote.map((item) => ({
-      id: null,
-      symbol: item.symbol,
-      name: item.name,
-      assetClass: item.assetClass,
-      exchange: item.exchange ?? null,
-      known: false,
-    }));
+
+    // Wyniki lokalne mają pierwszeństwo, ale zdalne je uzupełniają — ten sam
+    // porządek co w `suggestSymbols`.
+    const seen = new Set(local.map((item) => item.symbol.toUpperCase()));
+    const extra = remote
+      .filter((item) => !seen.has(item.symbol.toUpperCase()))
+      .map((item) => ({
+        id: null,
+        symbol: item.symbol,
+        name: item.name,
+        assetClass: item.assetClass,
+        exchange: item.exchange ?? null,
+        currency: item.currency,
+        known: false,
+      }));
+
+    return [...local, ...extra].slice(0, 15);
   } catch (err) {
     log.warn(`Wyszukiwanie „${query}" u dostawcy nieudane: ${errorMessage(err)}`);
-    return [];
+    return local;
   }
+}
+
+/** Escapowanie do budowy wyrażenia z tekstu użytkownika. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export async function buildResearch(instrumentId: number, portfolioId?: number): Promise<ResearchSnapshot | null> {
@@ -108,9 +145,15 @@ export async function buildResearch(instrumentId: number, portfolioId?: number):
 
   let candles = readCandles(instrument.id);
 
-  // Bez historii nie ma ani techniki, ani zmian procentowych — uzupełniamy
-  // zanim cokolwiek policzymy, zamiast oddawać pustą kartę.
-  if (candles.length < 30) {
+  /*
+   * Bez historii nie ma ani techniki, ani zmian procentowych — uzupełniamy
+   * zanim cokolwiek policzymy, zamiast oddawać pustą kartę.
+   *
+   * Warunek patrzy też na wiek ostatniej świecy, nie tylko na ich liczbę:
+   * papier z pełną historią urwaną rok temu nigdy nie spełniał progu
+   * trzydziestu świec i wskaźniki zostawały nieaktualne bez końca.
+   */
+  if (candles.length < 30 || historyNeedsRefresh(instrument.id)) {
     try {
       await backfillInstrumentHistory(instrument.id);
       candles = readCandles(instrument.id);
@@ -124,11 +167,11 @@ export async function buildResearch(instrumentId: number, portfolioId?: number):
 
   // Rekomendacje dociągamy, gdy ich brak — inaczej pierwsze wejście na kartę
   // pokazywałoby pustkę aż do najbliższego przebiegu zadania cyklicznego.
-  let ratings = ratingConsensus(instrument.id, priceE8);
+  let ratings = ratingConsensus(instrument.id, priceE8, instrument.currency);
   if (ratings.entries.length === 0) {
     try {
       await fetchRecommendations(instrument);
-      ratings = ratingConsensus(instrument.id, priceE8);
+      ratings = ratingConsensus(instrument.id, priceE8, instrument.currency);
     } catch (err) {
       log.warn(`Rekomendacje ${instrument.symbol} nieosiągalne: ${errorMessage(err)}`);
     }
@@ -325,14 +368,47 @@ export async function instrumentRatings(instrumentId: number): Promise<RatingCon
     .limit(1)
     .get();
 
-  let consensus = ratingConsensus(instrumentId, latest?.closeE8 ?? null);
+  let consensus = ratingConsensus(instrumentId, latest?.closeE8 ?? null, instrument.currency);
 
   if (consensus.entries.length === 0) {
     try {
       await fetchRecommendations(instrument);
-      consensus = ratingConsensus(instrumentId, latest?.closeE8 ?? null);
+      consensus = ratingConsensus(instrumentId, latest?.closeE8 ?? null, instrument.currency);
     } catch (err) {
       log.warn(`Rekomendacje ${instrument.symbol} nieosiągalne: ${errorMessage(err)}`);
+    }
+  }
+
+  /*
+   * Konsensus od dostawcy dokładamy obok odczytu z nagłówków, a nie zamiast
+   * niego: polska prasa opisuje decyzje krajowych domów maklerskich, których
+   * Yahoo nie zna, więc oba źródła się uzupełniają.
+   *
+   * Funkcja jest opcjonalna i domyślnie wyłączona — korzysta z
+   * nieudokumentowanego mechanizmu, który może przestać działać.
+   */
+  if (checkFeature('analystConsensus').enabled) {
+    const symbol = toYahooSymbol(toProviderInstrument(instrument));
+    if (symbol) {
+      const summary = await fetchAnalystSummary(symbol);
+      if (summary?.targetMeanE8) {
+        consensus = {
+          ...consensus,
+          provider: {
+            targetMeanE8: summary.targetMeanE8,
+            targetHighE8: summary.targetHighE8,
+            targetLowE8: summary.targetLowE8,
+            analystCount: summary.analystCount,
+            recommendationKey: summary.recommendationKey,
+            currency: summary.currency,
+            distribution: summary.distribution,
+            upsideBp:
+              latest?.closeE8 && latest.closeE8 > 0 && summary.currency === instrument.currency
+                ? Math.round((summary.targetMeanE8 / latest.closeE8 - 1) * 10_000)
+                : null,
+          },
+        };
+      }
     }
   }
 

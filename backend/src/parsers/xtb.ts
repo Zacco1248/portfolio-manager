@@ -1,5 +1,6 @@
 import { parse as parseHtml } from 'node-html-parser';
 import type { HTMLElement } from 'node-html-parser';
+import { equityClassFor } from '@portfolio/shared';
 import type { AssetClass, TransactionType } from '@portfolio/shared';
 import { normalizeDate } from '../lib/dates.js';
 import { createLogger } from '../lib/logger.js';
@@ -265,11 +266,12 @@ function currencyForSymbol(symbol: string): { currency: string; inferred: boolea
   return { currency, inferred: true, ambiguous: AMBIGUOUS_SUFFIXES.has(suffix) };
 }
 
-function assetClassFor(symbol: string): AssetClass {
+function assetClassFor(symbol: string, currency = ''): AssetClass {
   // XTB nie rozróżnia akcji i ETF-ów w wyciągu. Zgadywanie po nazwie byłoby
-  // zawodne, więc wszystko trafia jako akcje, a użytkownik może poprawić
-  // klasę na instrumencie — dotyczy to garstki pozycji.
-  return symbol ? 'stock' : 'cash';
+  // zawodne, więc wszystko trafia jako akcje, a `classifyAll` poprawia klasę
+  // po odpytaniu dostawcy. Oś krajową rozstrzygamy od razu z symbolu.
+  if (!symbol) return 'cash';
+  return equityClassFor('stock', { symbol, exchange: null, currency });
 }
 
 /** Dzieli tekst na liczbę, tolerując spacje i przecinki dziesiętne. */
@@ -374,7 +376,9 @@ export const xtbParser: ImportParser = {
           type,
           rawSymbol: symbol,
           instrumentName: null,
-          assetClass: assetClassFor(symbol),
+          // Wyciąg pochodzi z jednego brokera — konto wynika z samego źródła.
+          account: 'XTB',
+          assetClass: assetClassFor(symbol ?? '', currency),
           currency: rowCurrency,
           currencyInferred: !isBaseCurrency,
           quantity: trade.quantity,
@@ -396,7 +400,8 @@ export const xtbParser: ImportParser = {
         type,
         rawSymbol: symbol,
         instrumentName: null,
-        assetClass: symbol ? 'stock' : 'cash',
+        account: 'XTB',
+        assetClass: assetClassFor(symbol ?? '', currency),
         currency,
         currencyInferred: false,
         quantity: '0',

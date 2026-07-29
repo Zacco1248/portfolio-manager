@@ -6,7 +6,7 @@ import { errorMessage } from '../lib/errors.js';
 import { fetchJson } from '../lib/http-client.js';
 import { createLogger } from '../lib/logger.js';
 import type { AiProvider } from './ai-config.js';
-import { apiKeyFor, checkFeature, getAiSettings } from './ai-config.js';
+import { apiKeyFor, checkFeature, getAiSettings, onApiKeyChange } from './ai-config.js';
 
 const log = createLogger('ai');
 
@@ -40,6 +40,15 @@ function getAnthropic(): Anthropic | null {
   anthropicClient ??= new Anthropic({ apiKey: key });
   return anthropicClient;
 }
+
+/*
+ * Klient trzyma klucz w domknięciu, więc po zmianie klucza w ustawieniach
+ * trzeba go zrzucić — inaczej pierwsze zapytanie poleciałoby na starym
+ * i wyglądałoby to na błąd zapisu.
+ */
+onApiKeyChange(() => {
+  anthropicClient = null;
+});
 
 /**
  * Wywołanie modelu niezależne od dostawcy.
@@ -322,13 +331,22 @@ export const aiDisclaimer = AI_DISCLAIMER;
 
 const NARRATIVE_PROMPT = `Jesteś asystentem, który komentuje postępy inwestora indywidualnego.
 
-Dostajesz zagregowane liczby o portfelu. Napisz 3-4 zdania po polsku: co się udało, co warto docenić
-i na co zwrócić uwagę. Ton rzeczowy i wspierający, bez euforii i bez straszenia.
+Dostajesz liczby o portfelu: wynik zbiorczy, pozycje o największym wkładzie w ten wynik po obu stronach,
+odchylenia od alokacji docelowej, wykryte ostrzeżenia oraz zapłacone prowizje i podatki.
+
+Napisz 4-6 zdań po polsku, w tej kolejności:
+1. Co się udało — jednym zdaniem, rzeczowo.
+2. Co najmocniej zaciążyło na wyniku i dlaczego, na podstawie podanych pozycji i kosztów.
+3. Co dałoby się poprawić — wskaż konkretne miejsce (odchylenie od celu, koncentracja, koszty),
+   nie ogólniki w rodzaju „warto dywersyfikować".
+
+Ton rzeczowy i wspierający, bez euforii i bez straszenia.
 
 Zasady:
-- Nie doradzaj kupna ani sprzedaży czegokolwiek.
+- Nie doradzaj kupna ani sprzedaży konkretnego papieru. Możesz nazwać problem strukturalny
+  („jedna pozycja to 40% portfela"), ale nie mów, co z nią zrobić.
 - Nie obiecuj przyszłych wyników. Projekcja to ekstrapolacja tempa, powiedz to wprost, jeśli o niej wspominasz.
-- Nie wymyślaj liczb spoza tych, które dostałeś.
+- Nie wymyślaj liczb spoza tych, które dostałeś. Jeśli czegoś nie ma w danych, nie zgaduj.
 - Odpowiadasz samym tekstem, bez nagłówków i bez formatowania.`;
 
 export interface NarrativeInput {
@@ -338,6 +356,29 @@ export interface NarrativeInput {
   monthlyContributionPlnMinor: number;
   projectedIn5YearsPlnMinor: number;
   emergencyFundCoveredMonths: number | null;
+  /**
+   * Pozycje, które najmocniej ważą na wyniku — po obu stronach.
+   *
+   * Bez nich model widział wyłącznie sumę i nie miał jak odpowiedzieć na
+   * pytanie „co zaniżyło wynik": mógł tylko powtórzyć, że wynik jest taki,
+   * a nie inny.
+   */
+  contributors?: {
+    symbol: string;
+    name: string;
+    /** Wkład w wynik portfela w groszach — dodatni albo ujemny. */
+    resultPlnMinor: number;
+    /** Zwrot samej pozycji w punktach bazowych. */
+    returnBp: number | null;
+    sharePortfolioBp: number;
+  }[];
+  /** Odchylenia od alokacji docelowej — tylko te poza tolerancją. */
+  drift?: { label: string; currentShareBp: number; targetShareBp: number }[];
+  /** Ostrzeżenia o koncentracji i nieaktualnych cenach, liczone lokalnie. */
+  warnings?: string[];
+  /** Prowizje i podatki zapłacone od początku — realny koszt prowadzenia portfela. */
+  feesPlnMinor?: number;
+  taxesPlnMinor?: number;
 }
 
 /**
@@ -348,7 +389,9 @@ export async function generateNarrative(input: NarrativeInput): Promise<string |
   if (!checkFeature('insights').enabled) return null;
 
   const zl = (minor: number): string => (minor / 100).toFixed(2);
-  const payload = [
+  const percent = (bp: number | null): string => (bp === null ? 'brak danych' : `${(bp / 100).toFixed(1)}%`);
+
+  const sections = [
     `wartość portfela: ${zl(input.valuePlnMinor)} zł`,
     `wpłacony kapitał: ${zl(input.investedPlnMinor)} zł`,
     `wynik: ${zl(input.gainPlnMinor)} zł`,
@@ -357,10 +400,42 @@ export async function generateNarrative(input: NarrativeInput): Promise<string |
     input.emergencyFundCoveredMonths === null
       ? 'poduszka finansowa: nieskonfigurowana'
       : `poduszka finansowa pokrywa ${input.emergencyFundCoveredMonths} miesięcy wydatków`,
-  ].join('\n');
+  ];
+
+  if (input.feesPlnMinor !== undefined || input.taxesPlnMinor !== undefined) {
+    sections.push(
+      `zapłacone prowizje: ${zl(input.feesPlnMinor ?? 0)} zł, podatki: ${zl(input.taxesPlnMinor ?? 0)} zł`,
+    );
+  }
+
+  if (input.contributors && input.contributors.length > 0) {
+    sections.push(
+      '',
+      'wkład pozycji w wynik (od najlepszej do najgorszej):',
+      ...input.contributors.map(
+        (c) =>
+          `- ${c.symbol} (${c.name}): ${zl(c.resultPlnMinor)} zł, zwrot ${percent(c.returnBp)}, ` +
+          `udział ${percent(c.sharePortfolioBp)}`,
+      ),
+    );
+  }
+
+  if (input.drift && input.drift.length > 0) {
+    sections.push(
+      '',
+      'odchylenia od alokacji docelowej:',
+      ...input.drift.map((d) => `- ${d.label}: ${percent(d.currentShareBp)} wobec celu ${percent(d.targetShareBp)}`),
+    );
+  }
+
+  if (input.warnings && input.warnings.length > 0) {
+    sections.push('', `ostrzeżenia: ${input.warnings.join('; ')}`);
+  }
+
+  const payload = sections.join('\n');
 
   try {
-    return await complete(NARRATIVE_PROMPT, payload, 600);
+    return await complete(NARRATIVE_PROMPT, payload, 900);
   } catch (err) {
     log.warn(`Komentarz AI nieudany: ${errorMessage(err)}`);
     return null;
@@ -397,13 +472,13 @@ export async function testAiConnection(): Promise<AiConnectionTest> {
   const base = { provider: settings.provider, model: settings.model };
 
   if (!apiKeyFor(settings.provider)) {
-    const variable = settings.provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY';
+    const label = settings.provider === 'openai' ? 'OpenAI' : 'Anthropic';
     return {
       ...base,
       ok: false,
       latencyMs: null,
       reply: null,
-      message: `Brak ${variable} w pliku .env. Po dopisaniu klucza zrestartuj kontener — .env czytany jest przy starcie.`,
+      message: `Brak klucza ${label}. Wpisz go w Ustawieniach — zadziała od razu, bez restartu.`,
     };
   }
 
@@ -464,10 +539,10 @@ export async function testAiConnection(): Promise<AiConnectionTest> {
  */
 export function explainAiError(raw: string, provider: AiProvider): string {
   const text = raw.toLowerCase();
-  const variable = provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY';
+  const label = provider === 'openai' ? 'OpenAI' : 'Anthropic';
 
   if (text.includes('401') || text.includes('unauthorized') || text.includes('invalid_api_key') || text.includes('authentication')) {
-    return `Klucz odrzucony przez dostawcę. Sprawdź ${variable} w .env — czy nie ma spacji, cudzysłowów ani ucięcia na końcu.`;
+    return `Klucz ${label} odrzucony przez dostawcę. Sprawdź, czy nie ma w nim spacji, cudzysłowów ani ucięcia na końcu.`;
   }
   if (text.includes('404') || text.includes('model_not_found') || text.includes('does not exist')) {
     return 'Dostawca nie zna tego modelu. Wybierz inny z listy albo popraw wpisany identyfikator.';
