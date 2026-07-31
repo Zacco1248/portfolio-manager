@@ -103,8 +103,18 @@ const SOURCES: FeedSource[] = [
   // jeden pobrany kanał obsługuje wszystkie krajowe pozycje naraz.
   { id: 'bankier', urlFor: polishFeed('https://www.bankier.pl/rss/wiadomosci.xml') },
   { id: 'bankier-gielda', urlFor: polishFeed('https://www.bankier.pl/rss/gielda.xml') },
+  { id: 'bankier-firma', urlFor: polishFeed('https://www.bankier.pl/rss/firma.xml') },
   { id: 'pb-inwestora', urlFor: polishFeed('https://www.pb.pl/rss/puls-inwestora.xml') },
   { id: 'pb-najnowsze', urlFor: polishFeed('https://www.pb.pl/rss/najnowsze.xml') },
+  /*
+   * Kanały dołożone po tym, jak okazało się, że dwa serwisy dają zbyt wąskie
+   * pokrycie — sprawdzone pod kątem tego, czy faktycznie oddają wpisy
+   * i czy treść da się potem odczytać w czytniku.
+   */
+  { id: 'strefa-inwestorow', urlFor: polishFeed('https://strefainwestorow.pl/rss.xml') },
+  { id: 'money-gielda', urlFor: polishFeed('https://www.money.pl/rss/gielda.xml') },
+  { id: 'interia-gieldy', urlFor: polishFeed('https://biznes.interia.pl/gieldy/feed') },
+  { id: 'business-insider', urlFor: polishFeed('https://businessinsider.com.pl/.feed') },
 ];
 
 function yahooSymbol(instrument: InstrumentRow): string | null {

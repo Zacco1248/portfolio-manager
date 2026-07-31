@@ -3,7 +3,14 @@ import { asc, eq } from 'drizzle-orm';
 import { idParam, portfolioCreateSchema, portfolioUpdateSchema } from '@portfolio/shared';
 import type { Portfolio } from '@portfolio/shared';
 import { db } from '../db/index.js';
-import { portfolios, transactions } from '../db/schema.js';
+import {
+  bondHoldings,
+  portfolioSnapshots,
+  portfolios,
+  realizedGains,
+  targetAllocations,
+  transactions,
+} from '../db/schema.js';
 import type { PortfolioRow } from '../db/schema.js';
 import { conflict, notFound } from '../lib/errors.js';
 
@@ -91,18 +98,37 @@ portfoliosRouter.delete('/:id', (req, res, next) => {
   const current = db.select().from(portfolios).where(eq(portfolios.id, id.data)).get();
   if (!current) return next(notFound('Nie ma takiego portfela'));
 
-  // Usunięcie portfela skasowałoby jego transakcje kaskadowo. Nie robimy tego
-  // po cichu — użytkownik ma najpierw świadomie wyczyścić dane albo zarchiwizować.
   const txCount = db.select().from(transactions).where(eq(transactions.portfolioId, id.data)).all().length;
-  if (txCount > 0) {
+
+  /*
+   * Usunięcie portfela kasuje jego transakcje kaskadowo, więc domyślnie
+   * odmawiamy. Świadome wyczyszczenie danych — na przykład przed wgraniem
+   * arkusza od nowa — wymaga podania nazwy portfela w parametrze `confirm`.
+   * Sama flaga „na pewno" byłaby za łatwa do kliknięcia przez pomyłkę.
+   */
+  const confirm = typeof req.query.confirm === 'string' ? req.query.confirm : null;
+
+  if (txCount > 0 && confirm !== current.name) {
     return next(
       conflict(
-        `Portfel ma ${txCount} transakcji. Zarchiwizuj go zamiast usuwać albo najpierw usuń transakcje.`,
-        { transactions: txCount },
+        `Portfel ma ${txCount} transakcji. Zarchiwizuj go albo potwierdź usunięcie, wpisując jego nazwę.`,
+        { transactions: txCount, requiresConfirmation: true, name: current.name },
       ),
     );
   }
 
-  db.delete(portfolios).where(eq(portfolios.id, id.data)).run();
-  res.json({ ok: true });
+  /*
+   * Kolejność ma znaczenie: `realized_gains` i `bond_holdings` wskazują na
+   * portfel, a `transactions` znikną kaskadowo. Instrumenty zostają — są
+   * wspólne dla wszystkich portfeli i mają własną historię notowań.
+   */
+  db.transaction((tx) => {
+    tx.delete(realizedGains).where(eq(realizedGains.portfolioId, id.data)).run();
+    tx.delete(bondHoldings).where(eq(bondHoldings.portfolioId, id.data)).run();
+    tx.delete(portfolioSnapshots).where(eq(portfolioSnapshots.portfolioId, id.data)).run();
+    tx.delete(targetAllocations).where(eq(targetAllocations.portfolioId, id.data)).run();
+    tx.delete(portfolios).where(eq(portfolios.id, id.data)).run();
+  });
+
+  res.json({ ok: true, deletedTransactions: txCount });
 });

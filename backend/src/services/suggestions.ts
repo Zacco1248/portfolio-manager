@@ -134,6 +134,9 @@ Zasady:
   rozłożenie zakupu w czasie, unikanie jednorazowych dużych wejść — nie o przewidywaniu dołków.
 - Nie sugeruj sprzedaży. Ten portfel jest budowany dopłatami.
 - Jeśli struktura jest zdrowa, napisz to wprost zamiast wymyślać braki.
+- Nie wyliczaj czynników, których nie znasz (horyzont, tolerancja ryzyka, koszty transakcyjne,
+  sytuacja podatkowa). Zdanie bez konkretnej liczby albo nazwy wytnij zamiast je pisać.
+- Żadnych zwrotów „warto sprawdzić", „należy rozważyć", „dobrze zweryfikować".
 
 Odpowiadasz wyłącznie tablicą JSON: [{"kind":"...","title":"...","rationale":"..."}]`;
 

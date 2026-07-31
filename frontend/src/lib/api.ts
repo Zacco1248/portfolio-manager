@@ -118,7 +118,9 @@ export const api = {
     list: () => get<Portfolio[]>('/portfolios'),
     create: (body: Record<string, unknown>) => post<Portfolio>('/portfolios', body),
     update: (id: number, body: Record<string, unknown>) => patch<Portfolio>(`/portfolios/${id}`, body),
-    remove: (id: number) => del<{ ok: boolean }>(`/portfolios/${id}`),
+    /** `confirm` to nazwa portfela — wymagana, gdy ma transakcje do skasowania. */
+    remove: (id: number, confirm?: string) =>
+      del<{ ok: boolean; deletedTransactions?: number }>(`/portfolios/${id}${query({ confirm })}`),
   },
 
   accounts: {
@@ -305,6 +307,9 @@ export const api = {
     get: () => get<Record<string, unknown>>('/settings'),
     update: (body: Record<string, unknown>) => patch<Record<string, unknown>>('/settings', body),
     testTelegram: () => post<{ ok: boolean; message: string }>('/telegram/test'),
+    /** Zapis danych bota; wartości nie wracają do przeglądarki. */
+    saveTelegram: (body: { botToken?: string; chatId?: string }) =>
+      post<{ configured: boolean; test: { ok: boolean; message: string } | null }>('/telegram/config', body),
   },
 
   insights: {
@@ -353,6 +358,10 @@ export const api = {
       get<{
         provider: string;
         model: string;
+        /** Dostawca wskazany w ustawieniach — bywa inny niż faktycznie użyty. */
+        chosenProvider?: string;
+        /** Czy użyto drugiego dostawcy, bo wybrany nie ma klucza. */
+        usingFallbackProvider?: boolean;
         features: { key: string; label: string; description: string; dataSent: string; enabled: boolean; available: boolean; reason: string | null }[];
         keys: {
           anthropic: boolean;
@@ -607,6 +616,8 @@ export interface ResearchSnapshot {
     momentum20: number | null;
     fromYearHighPercent: number | null;
     fromYearLowPercent: number | null;
+    /** Data świecy, z której policzono wskaźniki. */
+    asOf: string | null;
   };
   signals: { date: string; label: string; detail: string }[];
   ratings: {

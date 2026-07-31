@@ -204,6 +204,46 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 }
 
 /**
+ * Objaśnienie przy etykiecie — ikona „i" z tekstem po najechaniu i po kliknięciu.
+ *
+ * Wskaźniki techniczne mają nazwy, które nic nie mówią bez tła („%K", „wstęga
+ * Bollingera"), a wpisywanie definicji do etykiety rozsadziłoby kafelek.
+ * Klik, nie samo najechanie, bo na telefonie nie ma czym najechać.
+ */
+export function InfoHint({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <span className="relative inline-flex">
+      <button
+        type="button"
+        className="ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-surface-border text-[9px] leading-none text-content-muted transition-colors hover:border-accent hover:text-accent"
+        aria-label="Wyjaśnienie"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        i
+      </button>
+
+      {open && (
+        <>
+          {/* Kliknięcie obok zamyka — inaczej na telefonie zostawałoby otwarte. */}
+          <button
+            type="button"
+            className="fixed inset-0 z-40 cursor-default"
+            aria-label="Zamknij wyjaśnienie"
+            onClick={() => setOpen(false)}
+          />
+          <span className="absolute left-0 top-5 z-50 w-64 rounded-card border border-surface-border bg-surface-overlay px-3 py-2 text-2xs font-normal normal-case leading-relaxed tracking-normal text-content-secondary shadow-lg">
+            {text}
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+
+/**
  * Select klasy aktywów z hierarchią.
  *
  * Akcje i ETF-y są rozbite na krajowe i zagraniczne, ale nadal sumują się do
@@ -269,8 +309,9 @@ export function DataTable({
 }) {
   return (
     // Przewijanie poziome zamknięte w kontenerze tabeli — strona nigdy nie
-    // przewija się w bok, nawet gdy kolumn jest dużo.
-    <div className="-mx-px overflow-x-auto">
+    // przewija się w bok, nawet gdy kolumn jest dużo. `max-w-full` domyka
+    // to od góry: bez niego kontener przyjmował szerokość tabeli.
+    <div className="-mx-px max-w-full overflow-x-auto">
       <table className="w-full border-collapse" style={{ minWidth }}>
         <thead>
           <tr className="table-head border-b border-surface-border">

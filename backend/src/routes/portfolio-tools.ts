@@ -259,7 +259,9 @@ toolsRouter.get(
           title: item.title,
           paragraphs: [],
           truncated: false,
-          message: 'Nie udało się odczytać treści — strona wymaga przeglądarki albo ukrywa tekst za zgodą na pliki cookie.',
+          message: article.paywalled
+            ? 'Serwis udostępnia ten materiał tylko prenumeratorom — w źródle strony nie ma treści do odczytania.'
+            : 'Nie udało się odczytać treści — strona wymaga przeglądarki albo ukrywa tekst za zgodą na pliki cookie.',
         });
       }
 
@@ -269,7 +271,11 @@ toolsRouter.get(
         title: article.title ?? item.title,
         paragraphs: article.paragraphs,
         truncated: article.truncated,
-        message: null,
+        // Przy paywallu mamy zwykle sam lead — mówimy o tym, zamiast zostawiać
+        // wrażenie, że artykuł tyle właśnie liczy.
+        message: article.paywalled
+          ? 'To fragment — dalsza część materiału jest dostępna tylko dla prenumeratorów serwisu.'
+          : null,
       });
     } catch (err) {
       res.json({

@@ -14,13 +14,27 @@
 /** Znaczniki, których zawartość nigdy nie jest treścią artykułu. */
 const NOISE_TAGS = ['script', 'style', 'noscript', 'iframe', 'svg', 'form', 'nav', 'aside', 'footer', 'header'];
 
-/** Kolejność prób: od najbardziej wiarygodnego pojemnika do najszerszego. */
+/**
+ * Kolejność prób: od najbardziej wiarygodnego pojemnika do najszerszego.
+ *
+ * Wzorce są globalne i sprawdzamy wszystkie dopasowania, a nie pierwsze.
+ * Serwisy potrafią zagnieżdżać `<article>` — wewnątrz właściwego tekstu siedzą
+ * kafelki „przeczytaj też", też opakowane w `<article>`. Leniwy regex kończył
+ * wtedy na pierwszym domknięciu i z całego materiału zostawał sam lead.
+ */
 const CONTENT_PATTERNS = [
-  /<article\b[^>]*>([\s\S]*?)<\/article>/i,
-  /<main\b[^>]*>([\s\S]*?)<\/main>/i,
-  /<div\b[^>]*(?:class|id)="[^"]*(?:article|content|entry|post|tresc|tekst)[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-  /<body\b[^>]*>([\s\S]*?)<\/body>/i,
+  /<article\b[^>]*>([\s\S]*?)<\/article>/gi,
+  /<main\b[^>]*>([\s\S]*?)<\/main>/gi,
+  /<div\b[^>]*(?:class|id)="[^"]*(?:article|content|entry|post|tresc|tekst)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+  /<body\b[^>]*>([\s\S]*?)<\/body>/gi,
 ];
+
+/** Ile akapitów zawiera fragment — miara tego, czy to właściwa treść. */
+function paragraphCount(fragment: string): number {
+  return [...fragment.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)].filter(
+    (m) => (m[1] ?? '').replace(/<[^>]+>/g, ' ').trim().length >= MIN_PARAGRAPH_CHARS,
+  ).length;
+}
 
 const ENTITIES: Record<string, string> = {
   amp: '&',
@@ -61,6 +75,11 @@ export interface ArticleContent {
   paragraphs: string[];
   /** Czy tekst został przycięty do limitu. */
   truncated: boolean;
+  /**
+   * Czy strona zasłania treść płatnym dostępem. Wtedy w HTML zostaje sam lead
+   * i warto powiedzieć wprost, że to nie usterka czytnika.
+   */
+  paywalled: boolean;
 }
 
 /** Górny limit długości — artykuły bywają długie, a to ma być podgląd. */
@@ -76,9 +95,28 @@ export function extractArticle(html: string): ArticleContent {
   }
   working = working.replace(/<!--[\s\S]*?-->/g, ' ');
 
-  const container = CONTENT_PATTERNS.map((pattern) => pattern.exec(working)?.[1]).find(
-    (candidate) => candidate && candidate.length > 200,
-  );
+  /*
+   * Spośród wszystkich dopasowań bierzemy to z największą liczbą akapitów,
+   * a nie pierwsze. Przy zagnieżdżonych pojemnikach pierwsze bywa najkrótsze.
+   */
+  let container: string | null = null;
+  let bestCount = 0;
+  for (const pattern of CONTENT_PATTERNS) {
+    for (const match of working.matchAll(pattern)) {
+      const candidate = match[1] ?? '';
+      if (candidate.length <= 200) continue;
+
+      const count = paragraphCount(candidate);
+      if (count > bestCount) {
+        bestCount = count;
+        container = candidate;
+      }
+    }
+    // Znaleziony sensowny pojemnik kończy poszukiwania — kolejne wzorce są
+    // coraz szersze i wciągnęłyby nawigację razem z treścią.
+    if (bestCount >= 3) break;
+  }
+
   const body = container ?? working;
 
   /*
@@ -118,5 +156,12 @@ export function extractArticle(html: string): ArticleContent {
     total += text.length;
   }
 
-  return { title: extractTitle(html), paragraphs, truncated };
+  /*
+   * Znaczniki systemów płatności — obecność któregokolwiek oznacza, że serwis
+   * świadomie oddał tylko fragment. Bez tego rozróżnienia krótki tekst
+   * wyglądałby na błąd wyciągania.
+   */
+  const paywalled = /piano-(?:hard-)?paywall|gate-teaser|paywall-box|premium-gate/i.test(html);
+
+  return { title: extractTitle(html), paragraphs, truncated, paywalled };
 }

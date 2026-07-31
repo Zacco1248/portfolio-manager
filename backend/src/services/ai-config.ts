@@ -173,6 +173,10 @@ export interface AiSettings {
   model: string;
   /** Które funkcje użytkownik świadomie włączył. */
   features: Record<AiFeature, boolean>;
+  /** Dostawca wskazany w ustawieniach — bywa inny niż faktycznie użyty. */
+  chosenProvider?: AiProvider;
+  /** Czy sięgnęliśmy po drugiego dostawcę, bo wybrany nie ma klucza. */
+  usingFallbackProvider?: boolean;
 }
 
 const DEFAULT_FEATURES: Record<AiFeature, boolean> = {
@@ -192,15 +196,34 @@ const DEFAULT_FEATURES: Record<AiFeature, boolean> = {
 };
 
 export function getAiSettings(): AiSettings {
-  const provider = getSetting<AiProvider>('aiProvider', 'anthropic');
+  const chosen = getSetting<AiProvider>('aiProvider', 'anthropic');
   const stored = getSetting<Partial<Record<AiFeature, boolean>>>('aiFeatures', {});
+
+  /*
+   * Dostawca wybrany w ustawieniach obowiązuje tylko wtedy, gdy da się z niego
+   * skorzystać. Domyślną wartością jest Anthropic, więc ktoś, kto wpisał sam
+   * klucz OpenAI, dostawał „brak klucza Anthropic" mimo posiadania działającego
+   * klucza — sensowniej użyć tego, który jest, niż odmówić działania.
+   */
+  const provider = apiKeyFor(chosen) ? chosen : (OTHER_PROVIDER[chosen] ?? chosen);
+  const switched = provider !== chosen;
 
   return {
     provider,
-    model: getSetting<string>('aiModel', defaultModelFor(provider)),
+    // Identyfikatory modeli nie są przenośne między dostawcami, więc po zmianie
+    // dostawcy zapisany model przestaje pasować i bierzemy domyślny.
+    model: switched ? defaultModelFor(provider) : getSetting<string>('aiModel', defaultModelFor(provider)),
     features: { ...DEFAULT_FEATURES, ...stored },
+    chosenProvider: chosen,
+    usingFallbackProvider: switched,
   };
 }
+
+/** Drugi z obsługiwanych dostawców — do zejścia, gdy wybrany nie ma klucza. */
+const OTHER_PROVIDER: Record<AiProvider, AiProvider> = {
+  anthropic: 'openai',
+  openai: 'anthropic',
+};
 
 export function defaultModelFor(provider: AiProvider): string {
   return provider === 'openai' ? config.ai.openAiModel : config.ai.model;
@@ -302,6 +325,19 @@ const FEATURES_WITHOUT_MODEL: readonly AiFeature[] = ['analystConsensus'];
 export function checkFeature(feature: AiFeature): AiAvailability {
   const settings = getAiSettings();
 
+  /*
+   * Kolejność sprawdzeń idzie od przyczyny najbardziej podstawowej. Brak klucza
+   * zgłaszamy przed wyłączoną flagą: włączenie funkcji bez klucza i tak nic
+   * nie da, a komunikat „funkcja wyłączona" kierował wtedy w złe miejsce.
+   */
+  if (!FEATURES_WITHOUT_MODEL.includes(feature) && !apiKeyFor(settings.provider)) {
+    const label = settings.provider === 'openai' ? 'OpenAI' : 'Anthropic';
+    return {
+      enabled: false,
+      reason: `Brak klucza ${label} — wpisz go w Ustawieniach, w karcie „Funkcje AI".`,
+    };
+  }
+
   if (!settings.features[feature]) {
     return { enabled: false, reason: `Funkcja „${AI_FEATURE_INFO[feature].label}" jest wyłączona w ustawieniach.` };
   }
@@ -327,6 +363,13 @@ export function aiStatus() {
   return {
     provider: settings.provider,
     model: settings.model,
+    /*
+     * Gdy wybrany dostawca nie ma klucza, a drugi ma, korzystamy z drugiego.
+     * Interfejs musi o tym powiedzieć, inaczej ustawienie „Anthropic" przy
+     * działającym OpenAI wyglądałoby na zignorowane.
+     */
+    usingFallbackProvider: settings.usingFallbackProvider ?? false,
+    chosenProvider: settings.chosenProvider ?? settings.provider,
     features: AI_FEATURES.map((feature) => ({
       ...AI_FEATURE_INFO[feature],
       enabled: settings.features[feature],

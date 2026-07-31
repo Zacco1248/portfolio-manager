@@ -273,13 +273,18 @@ Napisz po polsku 5-8 zdań w tej kolejności:
 2. Co mówi obraz techniczny — bez wróżenia, wyłącznie opis położenia wobec średnich, zmienności i momentum.
 3. Jak wygląda konsensus analityków i na ile jest jednomyślny. Zaznacz, że to zapis tego, co napisała prasa.
 4. Czy pasuje do TEGO portfela: co poprawia, co pogarsza, gdzie zwiększa koncentrację sektorową albo regionalną.
-5. Czego w tych danych nie ma, a powinno wpłynąć na decyzję — wycena fundamentalna, zadłużenie, koszty funduszu,
-   sytuacja podatkowa, horyzont inwestora.
 
 Zasady:
 - Nie mów „kup" ani „nie kupuj". Opisujesz dopasowanie do struktury, nie wydajesz zalecenia.
 - Nie prognozuj kursu i nie podawaj cen docelowych innych niż te z konsensusu.
 - Jeśli walor już jest w portfelu z dużym udziałem, powiedz to wprost.
+
+Styl odpowiedzi — równie ważny, co treść:
+- Pisz o tym, co widzisz w danych. Nie wyliczaj tego, czego w nich brakuje (wycena fundamentalna,
+  zadłużenie, koszty funduszu, sytuacja podatkowa, horyzont) — użytkownik i tak o tym wie, a taka
+  lista zajmuje miejsce, w którym powinien być konkret.
+- Żadnych zdań w rodzaju „warto sprawdzić", „należy rozważyć", „dobrze zweryfikować".
+- Każde zdanie ma nieść liczbę albo nazwę. Zdanie bez konkretu wytnij.
 - Piszesz zwartym tekstem, bez nagłówków i list punktowanych.`;
 
 export interface FitResult {

@@ -340,13 +340,20 @@ Napisz 4-6 zdań po polsku, w tej kolejności:
 3. Co dałoby się poprawić — wskaż konkretne miejsce (odchylenie od celu, koncentracja, koszty),
    nie ogólniki w rodzaju „warto dywersyfikować".
 
-Ton rzeczowy i wspierający, bez euforii i bez straszenia.
+Ton rzeczowy, bez euforii i bez straszenia.
 
 Zasady:
 - Nie doradzaj kupna ani sprzedaży konkretnego papieru. Możesz nazwać problem strukturalny
   („jedna pozycja to 40% portfela"), ale nie mów, co z nią zrobić.
-- Nie obiecuj przyszłych wyników. Projekcja to ekstrapolacja tempa, powiedz to wprost, jeśli o niej wspominasz.
-- Nie wymyślaj liczb spoza tych, które dostałeś. Jeśli czegoś nie ma w danych, nie zgaduj.
+- Nie obiecuj przyszłych wyników.
+- Nie wymyślaj liczb spoza tych, które dostałeś.
+
+Styl odpowiedzi — równie ważny, co treść:
+- Pisz o tym, co widzisz w danych. Nie wyliczaj czynników, których nie znasz (horyzont, tolerancja
+  ryzyka, koszty transakcyjne, sytuacja podatkowa) — użytkownik wie o nich lepiej niż Ty.
+- Żadnych zdań w rodzaju „warto sprawdzić", „należy rozważyć", „dobrze zweryfikować". Jeśli coś
+  wygląda niepokojąco, powiedz co i podaj liczbę.
+- Każde zdanie ma nieść konkret: nazwę pozycji, liczbę, kierunek zmiany.
 - Odpowiadasz samym tekstem, bez nagłówków i bez formatowania.`;
 
 export interface NarrativeInput {

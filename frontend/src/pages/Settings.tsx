@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ACCOUNT_KIND_LABELS, ACCOUNT_KINDS, ALERT_KIND_LABELS, rollUp, TAX_REGIMES, TAX_REGIME_LABELS } from '@portfolio/shared';
-import type { AccountKind, AlertKind, TaxRegime } from '@portfolio/shared';
-import { Card, DataTable, ErrorBanner, Field, Spinner, Toast, useToast } from '@/components/ui';
+import type { AccountKind, AlertKind, Portfolio, TaxRegime } from '@portfolio/shared';
+import { Card, DataTable, ErrorBanner, Field, Modal, Spinner, Toast, useToast } from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
 import { formatDate, formatDateTime, formatPln, relativeTime } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
@@ -15,6 +15,7 @@ export function Settings() {
   const [busy, setBusy] = useState(false);
 
   const [newPortfolio, setNewPortfolio] = useState({ name: '', kind: '', taxRegime: 'taxable' as TaxRegime, broker: '' });
+  const [portfolioToDelete, setPortfolioToDelete] = useState<Portfolio | null>(null);
 
   const notifications = (settings.data?.notifications ?? {}) as Record<string, boolean>;
 
@@ -40,16 +41,6 @@ export function Settings() {
   const toggleNotification = async (kind: string, enabled: boolean) => {
     await api.settings.update({ notifications: { ...notifications, [kind]: enabled } });
     settings.reload();
-  };
-
-  const testTelegram = async () => {
-    setBusy(true);
-    try {
-      const result = await api.settings.testTelegram();
-      show(result.message, result.ok ? 'success' : 'error');
-    } finally {
-      setBusy(false);
-    }
   };
 
   return (
@@ -126,6 +117,14 @@ export function Settings() {
                 >
                   {portfolio.archived ? 'Przywróć' : 'Archiwizuj'}
                 </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost px-2 py-0.5 text-2xs text-loss"
+                  onClick={() => setPortfolioToDelete(portfolio)}
+                  title="Usuń portfel wraz z transakcjami"
+                >
+                  Usuń
+                </button>
               </td>
             </tr>
           ))}
@@ -161,16 +160,11 @@ export function Settings() {
                 </li>
               ))}
             </ul>
-            <div className="flex items-center gap-3 border-t border-surface-border px-4 py-3">
-              <button type="button" className="btn" onClick={() => void testTelegram()} disabled={busy}>
-                Testuj połączenie z Telegramem
-              </button>
-              <span className="text-2xs text-content-muted">
-                {status?.features.telegram
-                  ? 'Bot skonfigurowany.'
-                  : 'Bot wyłączony — uzupełnij TELEGRAM_BOT_TOKEN i TELEGRAM_CHAT_ID w .env.'}
-              </span>
-            </div>
+            <TelegramFields
+              configured={status?.features.telegram ?? false}
+              onMessage={show}
+              onSaved={() => void refreshStatus()}
+            />
           </>
         )}
       </Card>
@@ -290,6 +284,19 @@ export function Settings() {
           </div>
         )}
       </Card>
+
+      {portfolioToDelete && (
+        <DeletePortfolioModal
+          portfolio={portfolioToDelete}
+          onClose={() => setPortfolioToDelete(null)}
+          onDeleted={(message) => {
+            setPortfolioToDelete(null);
+            void refreshPortfolios();
+            show(message, 'success');
+          }}
+          onError={(message) => show(message, 'error')}
+        />
+      )}
 
       {toast && <Toast message={toast.message} tone={toast.tone} onDismiss={dismiss} />}
     </div>
@@ -642,6 +649,14 @@ function AiSettingsCard({ onMessage }: { onMessage: (message: string, tone: 'inf
         </div>
       }
     >
+      {status.usingFallbackProvider && (
+        <p className="mx-4 mt-3 rounded-lg border border-surface-border bg-surface-overlay px-3 py-2 text-2xs text-content-secondary">
+          W ustawieniach wybrano {status.chosenProvider === 'openai' ? 'OpenAI' : 'Anthropic'}, ale klucz jest
+          tylko dla {status.provider === 'openai' ? 'OpenAI' : 'Anthropic'} — funkcje AI korzystają z tego
+          drugiego. Zmień dostawcę albo dopisz brakujący klucz, żeby pozbyć się tej niespójności.
+        </p>
+      )}
+
       <ApiKeyFields status={status} onSaved={ai.reload} onMessage={onMessage} />
 
       {test.result && (
@@ -992,5 +1007,178 @@ function ApiKeyFields({
         </Field>
       ))}
     </div>
+  );
+}
+
+/**
+ * Dane bota Telegram.
+ *
+ * Wcześniej dało się je podać wyłącznie w `.env`, czyli z konsoli serwera
+ * i z restartem — a to jedyna droga do powiadomień. Wartości zapisane tutaj
+ * mają pierwszeństwo przed plikiem i działają od razu; do przeglądarki nigdy
+ * nie wracają.
+ */
+function TelegramFields({
+  configured,
+  onMessage,
+  onSaved,
+}: {
+  configured: boolean;
+  onMessage: (message: string, tone: 'info' | 'error' | 'success') => void;
+  onSaved: () => void;
+}) {
+  const [botToken, setBotToken] = useState('');
+  const [chatId, setChatId] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const result = await api.settings.saveTelegram({
+        ...(botToken ? { botToken } : {}),
+        ...(chatId ? { chatId } : {}),
+      });
+      setBotToken('');
+      setChatId('');
+      onSaved();
+
+      // Test od razu po zapisie: literówka w tokenie inaczej ujawniłaby się
+      // dopiero przy pierwszym alercie, czyli długo po jej popełnieniu.
+      if (result.test) {
+        onMessage(result.test.message, result.test.ok ? 'success' : 'error');
+      } else {
+        onMessage('Zapisano. Uzupełnij oba pola, żeby włączyć powiadomienia.', 'info');
+      }
+    } catch (err) {
+      onMessage(err instanceof ApiError ? err.message : 'Nie udało się zapisać', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const test = async () => {
+    setBusy(true);
+    try {
+      const result = await api.settings.testTelegram();
+      onMessage(result.message, result.ok ? 'success' : 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-surface-border px-4 py-3">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Field label="Token bota" hint="Dostaniesz go od @BotFather">
+          <input
+            type="password"
+            className="input"
+            autoComplete="off"
+            placeholder={configured ? '•••••••• (wpisz, aby zmienić)' : '123456:ABC-DEF…'}
+            value={botToken}
+            onChange={(e) => setBotToken(e.target.value)}
+          />
+        </Field>
+        <Field label="Identyfikator czatu" hint="Napisz do @userinfobot, żeby go poznać">
+          <input
+            className="input"
+            autoComplete="off"
+            placeholder={configured ? '•••••••' : '123456789'}
+            value={chatId}
+            onChange={(e) => setChatId(e.target.value)}
+          />
+        </Field>
+        <div className="flex items-end gap-2">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy || (!botToken && !chatId)}
+            onClick={() => void save()}
+          >
+            Zapisz
+          </button>
+          <button type="button" className="btn" disabled={busy || !configured} onClick={() => void test()}>
+            Testuj
+          </button>
+        </div>
+      </div>
+
+      <p className="mt-2 text-2xs text-content-muted">
+        {configured
+          ? 'Bot skonfigurowany — powiadomienia o alertach trafiają na Telegram.'
+          : 'Bot wyłączony. Uzupełnij oba pola albo ustaw TELEGRAM_BOT_TOKEN i TELEGRAM_CHAT_ID w .env.'}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Usunięcie portfela wraz z całą jego historią.
+ *
+ * Operacja jest nieodwracalna i kasuje transakcje, rozliczenia FIFO, snapshoty
+ * i cele alokacji — dlatego wymaga przepisania nazwy, a nie samego kliknięcia
+ * „na pewno". Instrumenty zostają: są wspólne dla wszystkich portfeli i mają
+ * własną historię notowań, którą szkoda byłoby pobierać od nowa.
+ */
+function DeletePortfolioModal({
+  portfolio,
+  onClose,
+  onDeleted,
+  onError,
+}: {
+  portfolio: Portfolio;
+  onClose: () => void;
+  onDeleted: (message: string) => void;
+  onError: (message: string) => void;
+}) {
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const remove = async () => {
+    setBusy(true);
+    try {
+      const result = await api.portfolios.remove(portfolio.id, portfolio.name);
+      onDeleted(
+        result.deletedTransactions
+          ? `Portfel „${portfolio.name}" usunięty wraz z ${result.deletedTransactions} transakcjami.`
+          : `Portfel „${portfolio.name}" usunięty.`,
+      );
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Nie udało się usunąć portfela');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={`Usunąć portfel „${portfolio.name}"?`} onClose={onClose}>
+      <p className="text-sm text-content-secondary">
+        Znikną wszystkie transakcje tego portfela, rozliczenia zysków, zapisana historia wartości i cele
+        alokacji. Tej operacji nie da się cofnąć — kosz obejmuje pojedyncze transakcje, nie całe portfele.
+      </p>
+      <p className="mt-2 text-2xs text-content-muted">
+        Instrumenty i pobrane notowania zostają — są wspólne dla wszystkich portfeli.
+      </p>
+
+      <div className="mt-4">
+        <Field label={`Wpisz „${portfolio.name}", żeby potwierdzić`}>
+          <input className="input" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />
+        </Field>
+      </div>
+
+      <div className="mt-4 flex justify-end gap-2">
+        <button type="button" className="btn" onClick={onClose}>
+          Anuluj
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy || typed !== portfolio.name}
+          onClick={() => void remove()}
+        >
+          {busy ? 'Usuwam…' : 'Usuń bezpowrotnie'}
+        </button>
+      </div>
+    </Modal>
   );
 }

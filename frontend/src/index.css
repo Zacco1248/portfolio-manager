@@ -66,7 +66,13 @@
 
 @layer components {
   .card {
-    @apply rounded-card border border-surface-border bg-surface-raised;
+    /*
+     * `min-w-0` jest tu konieczne, nie kosmetyczne: element siatki ma domyślnie
+     * `min-width: auto`, więc karta z szeroką tabelą w środku rozpychała się
+     * ponad przydzieloną kolumnę i wypychała stronę poza ekran. Z zerowym
+     * minimum tabela przewija się we własnym kontenerze, tak jak zamierzono.
+     */
+    @apply min-w-0 max-w-full rounded-card border border-surface-border bg-surface-raised;
   }
 
   .card-title {

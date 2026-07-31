@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ALLOCATION_DIMENSION_LABELS, assetClassLabel } from '@portfolio/shared';
 import type { AllocationDimension, RebalancePlan } from '@portfolio/shared';
 import {
@@ -16,7 +16,7 @@ import {
 } from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
 import { formatPercent, formatPln, toneClass } from '@/lib/format';
-import { useAsync } from '@/lib/useAsync';
+import { useAsync, useOnDemand } from '@/lib/useAsync';
 import { usePortfolioParam } from '@/state/app';
 
 export function Rebalance() {
@@ -34,7 +34,10 @@ export function Rebalance() {
   // Struktura portfela liczy się lokalnie i pojawia natychmiast; propozycje
   // modelu dociągają się osobno, żeby nie opóźniały planu rebalansu.
   const context = useAsync(() => api.suggestions.context(portfolioId), [portfolioId]);
-  const suggestions = useAsync(() => api.suggestions.get(portfolioId), [portfolioId]);
+  // Propozycje modelu na żądanie: kosztują wywołanie i trwają, a liczby wyżej
+  // i tak powstają lokalnie. Zmiana portfela unieważnia poprzedni wynik.
+  const suggestions = useOnDemand(() => api.suggestions.get(portfolioId));
+  useEffect(() => suggestions.reset(), [portfolioId, suggestions.reset]);
 
   return (
     <div className="space-y-4">
@@ -70,23 +73,50 @@ export function Rebalance() {
       {plans.loading && <Spinner />}
       {plans.error && <ErrorBanner message={plans.error} onRetry={plans.reload} />}
 
-      {plans.data && (
-        <>
-          <WarningList warnings={plans.data.warnings} />
-          <div className="grid gap-4 xl:grid-cols-2">
-            <PlanCard title="Tylko dokupowanie" plan={plans.data.buyOnly} highlight />
-            <PlanCard title="Pełny rebalans" plan={plans.data.full} />
+      {/*
+        Bez celów alokacji rebalans nie ma czego liczyć — a wcześniej mówiła
+        o tym tylko drobna notka wewnątrz pustej karty planu, więc wyglądało to
+        na awarię. Teraz brak konfiguracji jest widoczny od razu i prowadzi
+        do miejsca, w którym da się ją uzupełnić.
+      */}
+      {plans.data && plans.data.buyOnly.actions.length === 0 && (targets.data?.targets.length ?? 0) === 0 ? (
+        <Card title="Najpierw ustaw cele">
+          <div className="px-4 pb-4 pt-2 text-sm text-content-secondary">
+            <p>
+              Rebalans porównuje bieżącą strukturę portfela z docelową — bez zdefiniowanych celów nie ma
+              czego porównywać.
+            </p>
+            <p className="mt-2 text-2xs text-content-muted">
+              Ustaw je w sekcji „Alokacja docelowa" na dole strony. Wystarczy kilka pozycji, na przykład
+              60% akcji, 30% obligacji, 10% gotówki. Cel można ustawić na grupie („Akcje") albo osobno
+              na akcjach polskich i zagranicznych.
+            </p>
           </div>
-        </>
+        </Card>
+      ) : (
+        plans.data && (
+          <>
+            <WarningList warnings={plans.data.warnings} />
+            <div className="grid gap-4 xl:grid-cols-2">
+              <PlanCard title="Tylko dokupowanie" plan={plans.data.buyOnly} highlight />
+              <PlanCard title="Pełny rebalans" plan={plans.data.full} />
+            </div>
+          </>
+        )
       )}
 
       {context.data && (
         <Card
           title="Czego brakuje w portfelu"
           action={
-            suggestions.data?.unavailableReason ? (
-              <span className="text-2xs text-content-muted">Propozycje AI wyłączone</span>
-            ) : null
+            <button
+              type="button"
+              className="btn text-2xs"
+              disabled={suggestions.loading}
+              onClick={suggestions.run}
+            >
+              {suggestions.loading ? 'Analizuję…' : suggestions.started ? 'Odśwież propozycje' : 'Poproś o propozycje'}
+            </button>
           }
         >
           <div className="grid gap-3 p-4 pt-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -100,7 +130,12 @@ export function Rebalance() {
             />
           </div>
 
-          {suggestions.loading ? (
+          {!suggestions.started ? (
+            <p className="border-t border-surface-border px-4 py-3 text-2xs text-content-muted">
+              Liczby powyżej powstają lokalnie. Konkretne kierunki uzupełnienia podpowie model — kliknij
+              „Poproś o propozycje", jeśli ich potrzebujesz.
+            </p>
+          ) : suggestions.loading ? (
             <div className="border-t border-surface-border">
               <AiPending lines={4} label="Model dobiera kierunki uzupełnienia…" />
             </div>

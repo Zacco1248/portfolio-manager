@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '@/lib/api';
 
 /**
@@ -43,4 +43,54 @@ export function useAsync<T>(
   }, [run, nonce]);
 
   return { data, error, loading, reload: () => setNonce((n) => n + 1) };
+}
+
+/**
+ * Wariant dla zapytań, które mają ruszyć dopiero po kliknięciu.
+ *
+ * Wywołania modelu kosztują i trwają, więc uruchamianie ich przy każdym
+ * wejściu na stronę oznaczało rachunek za treść, której nikt nie przeczytał —
+ * i czekanie na komentarz, gdy chciało się tylko zerknąć na liczby.
+ *
+ * `reset` przydaje się przy zmianie portfela: poprzedni wynik dotyczy już
+ * czegoś innego i nie powinien wisieć na ekranie.
+ */
+export function useOnDemand<T>(
+  loader: () => Promise<T>,
+): {
+  data: T | null;
+  error: string | null;
+  loading: boolean;
+  started: boolean;
+  run: () => void;
+  reset: () => void;
+} {
+  const [data, setData] = useState<T | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [started, setStarted] = useState(false);
+
+  const loaderRef = useRef(loader);
+  loaderRef.current = loader;
+
+  const run = useCallback(() => {
+    setStarted(true);
+    setLoading(true);
+    setError(null);
+
+    loaderRef.current()
+      .then(setData)
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : 'Nie udało się pobrać danych');
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const reset = useCallback(() => {
+    setData(null);
+    setError(null);
+    setStarted(false);
+  }, []);
+
+  return { data, error, loading, started, run, reset };
 }
