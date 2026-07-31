@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
+import { Children, cloneElement, isValidElement, useEffect, useState } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import {
   ASSET_CLASS_CHILDREN,
   ASSET_CLASS_GROUP_LABELS,
@@ -296,7 +296,18 @@ export function AssetClassSelect({
   );
 }
 
-/** Tabela z lepkim nagłówkiem i poziomym przewijaniem — kolumn bywa dużo. */
+/**
+ * Tabela, która poniżej `sm` przestaje być tabelą.
+ *
+ * Sześć kolumn na ekranie o szerokości 390 pikseli oznacza przewijanie w bok
+ * przez półtora ekranu, żeby zobaczyć ostatnią wartość — a przy przewijaniu
+ * ginie nagłówek, więc nie wiadomo, na co się patrzy. Na wąskim ekranie każdy
+ * wiersz staje się więc kartą, w której komórki mają widoczne etykiety.
+ *
+ * Etykiety wstrzykujemy tutaj, klonując komórki i dopisując im `data-label`
+ * z odpowiadającego nagłówka. Dzięki temu żadna strona nie musi się zmieniać
+ * ani powtarzać nazw kolumn — a CSS ma czego użyć w `::before`.
+ */
 export function DataTable({
   headers,
   children,
@@ -307,12 +318,28 @@ export function DataTable({
   /** Szerokość, poniżej której tabela przewija się poziomo zamiast ściskać kolumny. */
   minWidth?: number;
 }) {
+  const labels = headers.map((header) => (typeof header === 'string' ? header : header.label));
+
+  const withLabels = Children.map(children, (row) => {
+    if (!isValidElement(row)) return row;
+
+    const cells = Children.map(
+      (row.props as { children?: ReactNode }).children,
+      (cell, index) =>
+        isValidElement(cell)
+          ? cloneElement(cell as ReactElement<{ 'data-label'?: string }>, { 'data-label': labels[index] ?? '' })
+          : cell,
+    );
+
+    return cloneElement(row as ReactElement<{ children?: ReactNode }>, { children: cells });
+  });
+
   return (
     // Przewijanie poziome zamknięte w kontenerze tabeli — strona nigdy nie
     // przewija się w bok, nawet gdy kolumn jest dużo. `max-w-full` domyka
     // to od góry: bez niego kontener przyjmował szerokość tabeli.
     <div className="-mx-px max-w-full overflow-x-auto">
-      <table className="w-full border-collapse" style={{ minWidth }}>
+      <table className="data-table w-full border-collapse" style={{ minWidth }}>
         <thead>
           <tr className="table-head border-b border-surface-border">
             {headers.map((header, index) => {
@@ -326,7 +353,7 @@ export function DataTable({
             })}
           </tr>
         </thead>
-        <tbody className="divide-y divide-surface-border">{children}</tbody>
+        <tbody className="divide-y divide-surface-border">{withLabels}</tbody>
       </table>
     </div>
   );

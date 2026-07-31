@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync, useOnDemand } from '@/lib/useAsync';
 import { usePortfolioParam } from '@/state/app';
+import { AXIS_TICK, TOOLTIP_STYLE, useAxisDensity } from '@/lib/chart';
 
 /** Horyzonty projekcji dostępne w interfejsie. */
 const PROJECTION_HORIZONS = [3, 5, 10, 15, 20, 30] as const;
@@ -27,6 +28,7 @@ const KIND_STYLE: Record<string, { icon: string; className: string }> = {
  */
 export function Insights() {
   const portfolioId = usePortfolioParam();
+  const { minTickGap, yAxisWidth } = useAxisDensity();
   const [years, setYears] = useState(5);
   const { data, error, loading, reload } = useAsync(
     () => api.insights.get(portfolioId, years),
@@ -144,30 +146,26 @@ export function Insights() {
         </div>
 
         {chartData.length > 0 && (
-          <div className="h-64 px-2 pb-2">
+          <div className="chart-box px-2 pb-2">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                 <CartesianGrid stroke="rgb(var(--surface-border))" strokeDasharray="2 4" vertical={false} />
                 <XAxis
                   dataKey="label"
-                  tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+                  tick={AXIS_TICK}
                   axisLine={false}
                   tickLine={false}
+                  minTickGap={minTickGap}
                 />
                 <YAxis
-                  tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+                  tick={AXIS_TICK}
                   axisLine={false}
                   tickLine={false}
-                  width={64}
+                  width={yAxisWidth}
                   tickFormatter={(v: number) => new Intl.NumberFormat('pl-PL', { notation: 'compact' }).format(v)}
                 />
                 <Tooltip
-                  contentStyle={{
-                    background: 'rgb(var(--surface-overlay))',
-                    border: '1px solid rgb(var(--surface-border))',
-                    borderRadius: 8,
-                    fontSize: 12,
-                  }}
+                  contentStyle={TOOLTIP_STYLE}
                   formatter={(value: number) =>
                     new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN', maximumFractionDigits: 0 }).format(
                       value,

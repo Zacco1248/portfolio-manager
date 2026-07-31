@@ -20,6 +20,7 @@ import type { StatsResponse } from '@/lib/api';
 import { formatDate, formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
 import { usePortfolioParam } from '@/state/app';
+import { AXIS_TICK, TOOLTIP_STYLE, useAxisDensity } from '@/lib/chart';
 
 /** Kolory serii: portfel wyróżniony, benchmarki stonowane. */
 const SERIES_COLORS = ['#fbbf24', '#a78bfa', '#34d399', '#f472b6'];
@@ -32,6 +33,7 @@ const SERIES_COLORS = ['#fbbf24', '#a78bfa', '#34d399', '#f472b6'];
  */
 export function Analysis() {
   const portfolioId = usePortfolioParam();
+  const { minTickGap, yAxisWidth } = useAxisDensity();
   const [selected, setSelected] = useState<string[]>(['WIG20TR', 'SP500']);
   const [busy, setBusy] = useState(false);
   const { toast, show, dismiss } = useToast();
@@ -160,34 +162,29 @@ export function Analysis() {
             działa krótko, zaimportuj historię z arkusza Inwestomatu albo poczekaj kilka dni.
           </p>
         ) : (
-          <div className="h-80 px-2 pb-2">
+          <div className="chart-box-lg px-2 pb-2">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                 <CartesianGrid stroke="rgb(var(--surface-border))" strokeDasharray="2 4" vertical={false} />
                 <XAxis
                   dataKey="date"
                   tickFormatter={(v: string) => formatDate(v)}
-                  tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+                  tick={AXIS_TICK}
                   axisLine={false}
                   tickLine={false}
-                  minTickGap={50}
+                  minTickGap={minTickGap}
                 />
                 <YAxis
                   domain={['auto', 'auto']}
-                  tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+                  tick={AXIS_TICK}
                   axisLine={false}
                   tickLine={false}
-                  width={56}
+                  width={yAxisWidth}
                   tickFormatter={(v: number) => `${v > 0 ? '+' : ''}${v.toFixed(0)}%`}
                 />
                 <ReferenceLine y={0} stroke="rgb(var(--content-muted))" strokeDasharray="3 3" />
                 <Tooltip
-                  contentStyle={{
-                    background: 'rgb(var(--surface-overlay))',
-                    border: '1px solid rgb(var(--surface-border))',
-                    borderRadius: 8,
-                    fontSize: 12,
-                  }}
+                  contentStyle={TOOLTIP_STYLE}
                   labelFormatter={(label: string) => formatDate(label)}
                   formatter={(value: number) => `${value > 0 ? '+' : ''}${value.toFixed(2)}%`}
                 />
@@ -376,6 +373,7 @@ function RiskCard({ stats }: { stats: StatsResponse }) {
  * wyglądałaby jak krach.
  */
 function DrawdownCard({ risk }: { risk: StatsResponse['risk'] }) {
+  const { minTickGap, yAxisWidth } = useAxisDensity();
   const series = risk.drawdownSeries;
 
   if (series.length < 2) {
@@ -401,7 +399,7 @@ function DrawdownCard({ risk }: { risk: StatsResponse['risk'] }) {
         </span>
       }
     >
-      <div className="h-56 px-2 pb-2">
+      <div className="chart-box px-2 pb-2">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart
             data={series.map((point) => ({ date: point.date, drawdown: point.drawdownBp / 100 }))}
@@ -417,27 +415,22 @@ function DrawdownCard({ risk }: { risk: StatsResponse['risk'] }) {
             <XAxis
               dataKey="date"
               tickFormatter={(v: string) => formatDate(v)}
-              tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+              tick={AXIS_TICK}
               axisLine={false}
               tickLine={false}
-              minTickGap={50}
+              minTickGap={minTickGap}
             />
             <YAxis
               domain={[(min: number) => Math.min(min * 1.1, -1), 0]}
-              tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+              tick={AXIS_TICK}
               axisLine={false}
               tickLine={false}
-              width={56}
+              width={yAxisWidth}
               tickFormatter={(v: number) => `${v.toFixed(0)}%`}
             />
             <ReferenceLine y={0} stroke="rgb(var(--content-muted))" strokeDasharray="3 3" />
             <Tooltip
-              contentStyle={{
-                background: 'rgb(var(--surface-overlay))',
-                border: '1px solid rgb(var(--surface-border))',
-                borderRadius: 8,
-                fontSize: 12,
-              }}
+              contentStyle={TOOLTIP_STYLE}
               labelFormatter={(label: string) => formatDate(label)}
               formatter={(value: number) => [`${value.toFixed(2)}%`, 'Poniżej szczytu']}
             />

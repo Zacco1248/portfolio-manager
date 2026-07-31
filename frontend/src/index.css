@@ -112,6 +112,78 @@
     @apply whitespace-nowrap px-3 py-2 text-sm;
   }
 
+  /*
+   * Kontener wykresu o proporcji zamiast stałej wysokości.
+   *
+   * Przy `h-64` wykres na telefonie robi się prawie kwadratowy: osie zlewają
+   * się z danymi, a etykiety dat nachodzą na siebie. Proporcja utrzymuje
+   * czytelny kształt niezależnie od szerokości, a `min-height` pilnuje, żeby
+   * na bardzo wąskim ekranie nie spłaszczył się do paska.
+   */
+  .chart-box {
+    @apply aspect-[4/3] min-h-[13rem] w-full sm:aspect-[16/9] sm:min-h-[15rem];
+  }
+
+  /** Wariant dla wykresów głównych, którym warto dać więcej miejsca. */
+  .chart-box-lg {
+    @apply aspect-[4/3] min-h-[15rem] w-full sm:aspect-[2/1] sm:min-h-[18rem];
+  }
+
+  /*
+   * Poniżej `sm` tabela przestaje być tabelą.
+   *
+   * Sześć kolumn na ekranie 390 px to przewijanie w bok przez półtora ekranu,
+   * a przy przewijaniu ginie nagłówek — nie wiadomo, na co się patrzy. Każdy
+   * wiersz staje się więc kartą, a komórki dostają widoczne etykiety z
+   * `data-label`, które `DataTable` wstrzykuje z nagłówków kolumn.
+   *
+   * Świadomie w CSS, a nie przez osobny komponent listy: dzięki temu żadna
+   * strona nie musi utrzymywać dwóch wersji tego samego widoku.
+   */
+  @media (max-width: 639px) {
+    .data-table {
+      /* Nadpisuje `min-width` ustawiany inline pod układ kolumnowy. */
+      min-width: 0 !important;
+      display: block;
+    }
+
+    .data-table thead {
+      /* Nagłówek kolumn jest teraz przy każdej wartości z osobna. */
+      display: none;
+    }
+
+    .data-table tbody,
+    .data-table tr {
+      display: block;
+    }
+
+    .data-table tr {
+      @apply mb-2 rounded-card border border-surface-border bg-surface-overlay/30 px-3 py-2;
+    }
+
+    .data-table tr:last-child {
+      @apply mb-0;
+    }
+
+    .data-table td {
+      @apply flex items-baseline justify-between gap-3 whitespace-normal px-0 py-1 text-sm;
+    }
+
+    .data-table td::before {
+      content: attr(data-label);
+      @apply shrink-0 text-2xs uppercase tracking-wide text-content-muted;
+    }
+
+    /* Komórka bez etykiety (kolumna akcji) zajmuje całą szerokość. */
+    .data-table td[data-label='']::before {
+      content: none;
+    }
+
+    .data-table td[data-label=''] {
+      @apply justify-end pt-1.5;
+    }
+  }
+
   .badge {
     @apply inline-flex items-center rounded px-1.5 py-0.5 text-2xs font-medium;
   }

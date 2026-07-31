@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { TAX_REGIME_LABELS } from '@portfolio/shared';
 import { relativeTime } from '@/lib/format';
 import { ALL_PORTFOLIOS, useApp } from '@/state/app';
@@ -23,9 +23,37 @@ const NAV = [
   { to: '/pomoc', label: 'Pomoc' },
 ];
 
+/**
+ * Skróty na dolnym pasku telefonu.
+ *
+ * Trzy ekrany, na które wchodzi się codziennie — reszta menu zostaje pod
+ * „Więcej”. Wcześniej każde przejście, także z pulpitu na pozycje, wymagało
+ * otwarcia szufladki z szesnastoma pozycjami i przewinięcia jej.
+ */
+const BOTTOM_NAV = [
+  { to: '/', label: 'Pulpit', end: true, icon: 'M3 11 12 4l9 7v8a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z' },
+  { to: '/pozycje', label: 'Pozycje', icon: 'M4 19V9m5 10V5m5 14v-7m5 7V8' },
+  { to: '/transakcje', label: 'Transakcje', icon: 'M4 8h13m0 0-3-3m3 3-3 3M20 16H7m0 0 3-3m-3 3 3 3' },
+];
+
+/** Ikona paska dolnego — kontur, żeby czytała się w obu motywach. */
+function NavIcon({ path }: { path: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={path} />
+    </svg>
+  );
+}
+
 export function Layout() {
   const { portfolios, selectedPortfolioId, selectPortfolio, status, theme, toggleTheme, logout } = useApp();
   const [navOpen, setNavOpen] = useState(false);
+  const location = useLocation();
+  // „Więcej” świeci się wtedy, gdy bieżący ekran nie ma własnego skrótu —
+  // inaczej pasek sugerowałby, że użytkownik jest nigdzie.
+  const onShortcut = BOTTOM_NAV.some((item) =>
+    item.end ? location.pathname === item.to : location.pathname.startsWith(item.to),
+  );
 
   /*
    * Otwarte menu przykrywa całą treść, więc musi się zachowywać jak okno
@@ -54,17 +82,8 @@ export function Layout() {
     <div className="flex min-h-full flex-col">
       <header className="sticky top-0 z-30 border-b border-surface-border bg-surface-raised/95 backdrop-blur">
         <div className="flex flex-wrap items-center gap-3 px-4 py-2">
-          <button
-            type="button"
-            className="btn btn-ghost px-2 py-1 lg:hidden"
-            onClick={() => setNavOpen((open) => !open)}
-            aria-label={navOpen ? 'Zamknij menu' : 'Otwórz menu'}
-            aria-expanded={navOpen}
-            aria-controls="menu-glowne"
-          >
-            {navOpen ? '✕' : '☰'}
-          </button>
-
+          {/* Menu otwiera się z dolnego paska („Więcej”), więc w nagłówku nie ma
+              już hamburgera — dwa przełączniki tej samej szufladki myliły. */}
           <span className="text-sm font-semibold tracking-tight">Portfolio Manager</span>
 
           {/* Przełącznik portfela — użytkownik prowadzi kilka rachunków
@@ -122,7 +141,7 @@ export function Layout() {
           id="menu-glowne"
           className={`${
             navOpen ? 'fixed' : 'hidden'
-          } inset-y-0 left-0 z-40 w-64 shrink-0 overflow-y-auto border-r border-surface-border bg-surface-raised p-2 lg:static lg:z-auto lg:block lg:w-48 lg:overflow-visible`}
+          } inset-y-0 left-0 z-40 w-64 shrink-0 overflow-y-auto border-r border-surface-border bg-surface-raised p-2 pb-24 lg:static lg:z-auto lg:block lg:w-48 lg:overflow-visible lg:pb-2`}
         >
           <ul className="space-y-0.5">
             {NAV.map((item) => (
@@ -152,10 +171,51 @@ export function Layout() {
           )}
         </nav>
 
-        <main className="min-w-0 flex-1 p-4">
+        {/* Zapas u dołu na wysokość paska skrótów, żeby ostatni wiersz tabeli
+            nie chował się pod nim na telefonie. */}
+        <main className="min-w-0 flex-1 p-4 pb-24 lg:pb-4">
           <Outlet />
         </main>
       </div>
+
+      <nav
+        className="fixed inset-x-0 bottom-0 z-30 border-t border-surface-border bg-surface-raised/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
+        aria-label="Skróty nawigacji"
+      >
+        <ul className="grid grid-cols-4">
+          {BOTTOM_NAV.map((item) => (
+            <li key={item.to}>
+              <NavLink
+                to={item.to}
+                end={item.end}
+                onClick={() => setNavOpen(false)}
+                className={({ isActive }) =>
+                  `flex flex-col items-center gap-0.5 py-2 text-2xs transition-colors ${
+                    isActive ? 'text-accent' : 'text-content-muted'
+                  }`
+                }
+              >
+                <NavIcon path={item.icon} />
+                {item.label}
+              </NavLink>
+            </li>
+          ))}
+          <li>
+            <button
+              type="button"
+              className={`flex w-full flex-col items-center gap-0.5 py-2 text-2xs transition-colors ${
+                navOpen || !onShortcut ? 'text-accent' : 'text-content-muted'
+              }`}
+              onClick={() => setNavOpen((open) => !open)}
+              aria-expanded={navOpen}
+              aria-controls="menu-glowne"
+            >
+              <NavIcon path="M4 7h16M4 12h16M4 17h16" />
+              Więcej
+            </button>
+          </li>
+        </ul>
+      </nav>
     </div>
   );
 }

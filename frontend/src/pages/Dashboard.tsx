@@ -21,6 +21,7 @@ import { api } from '@/lib/api';
 import { formatDate, formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
 import { usePortfolioParam } from '@/state/app';
+import { AXIS_TICK, TOOLTIP_STYLE, useAxisDensity } from '@/lib/chart';
 
 /**
  * Paleta wykresów alokacji.
@@ -292,6 +293,7 @@ function AccountsCard({ portfolioId }: { portfolioId: number | undefined }) {
 }
 
 function ValueChart({ history }: { history: SnapshotPoint[] }) {
+  const { minTickGap, yAxisWidth } = useAxisDensity();
   const series = useMemo(
     () =>
       history.map((point) => ({
@@ -311,7 +313,7 @@ function ValueChart({ history }: { history: SnapshotPoint[] }) {
   }
 
   return (
-    <div className="h-64 px-2 pb-2 pt-3">
+    <div className="chart-box px-2 pb-2 pt-3">
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={series} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <defs>
@@ -323,25 +325,20 @@ function ValueChart({ history }: { history: SnapshotPoint[] }) {
           <XAxis
             dataKey="date"
             tickFormatter={formatDate}
-            tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+            tick={AXIS_TICK}
             axisLine={false}
             tickLine={false}
-            minTickGap={40}
+            minTickGap={minTickGap}
           />
           <YAxis
-            tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+            tick={AXIS_TICK}
             axisLine={false}
             tickLine={false}
-            width={64}
+            width={yAxisWidth}
             tickFormatter={(v: number) => new Intl.NumberFormat('pl-PL', { notation: 'compact' }).format(v)}
           />
           <Tooltip
-            contentStyle={{
-              background: 'rgb(var(--surface-overlay))',
-              border: '1px solid rgb(var(--surface-border))',
-              borderRadius: 8,
-              fontSize: 12,
-            }}
+            contentStyle={TOOLTIP_STYLE}
             labelFormatter={(label: string) => formatDate(label)}
             formatter={(value: number, name) => [
               new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' }).format(value),
@@ -409,7 +406,7 @@ function AllocationChart({ slices, emptyHint }: { slices: AllocationSlice[]; emp
   }));
 
   return (
-    <div className="h-64 px-2 pb-2 pt-3">
+    <div className="chart-box px-2 pb-2 pt-3">
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
           <Pie data={data} dataKey="value" nameKey="name" innerRadius="55%" outerRadius="80%" paddingAngle={1}>
@@ -430,12 +427,7 @@ function AllocationChart({ slices, emptyHint }: { slices: AllocationSlice[]; emp
             }}
           />
           <Tooltip
-            contentStyle={{
-              background: 'rgb(var(--surface-overlay))',
-              border: '1px solid rgb(var(--surface-border))',
-              borderRadius: 8,
-              fontSize: 12,
-            }}
+            contentStyle={TOOLTIP_STYLE}
             formatter={(value: number) =>
               new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' }).format(value)
             }

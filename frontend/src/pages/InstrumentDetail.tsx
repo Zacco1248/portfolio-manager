@@ -12,6 +12,7 @@ import { formatCost, formatDate, formatPercent, formatPln, formatQuantity, relat
 import { TransactionForm } from '@/components/TransactionForm';
 import { useAsync } from '@/lib/useAsync';
 import { ALL_PORTFOLIOS, useApp } from '@/state/app';
+import { AXIS_TICK, TOOLTIP_STYLE, useAxisDensity } from '@/lib/chart';
 
 /**
  * Analiza techniczna pojedynczego instrumentu.
@@ -21,6 +22,7 @@ import { ALL_PORTFOLIOS, useApp } from '@/state/app';
  */
 export function InstrumentDetail() {
   const { id } = useParams();
+  const { minTickGap, yAxisWidth } = useAxisDensity();
   const instrumentId = Number(id);
   const { data, error, loading, reload } = useAsync(() => api.analytics.technical(instrumentId), [instrumentId]);
   const dividends = useAsync(() => api.corporate.dividendHistory(instrumentId), [instrumentId]);
@@ -183,32 +185,27 @@ export function InstrumentDetail() {
             sma200={data.indicators.sma200}
           />
         ) : (
-          <div className="h-72 px-2 pb-2 pt-3">
+          <div className="chart-box-lg px-2 pb-2 pt-3">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={series} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                 <CartesianGrid stroke="rgb(var(--surface-border))" strokeDasharray="2 4" vertical={false} />
                 <XAxis
                   dataKey="date"
                   tickFormatter={formatDate}
-                  tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+                  tick={AXIS_TICK}
                   axisLine={false}
                   tickLine={false}
-                  minTickGap={50}
+                  minTickGap={minTickGap}
                 />
                 <YAxis
                   domain={['auto', 'auto']}
-                  tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+                  tick={AXIS_TICK}
                   axisLine={false}
                   tickLine={false}
-                  width={56}
+                  width={yAxisWidth}
                 />
                 <Tooltip
-                  contentStyle={{
-                    background: 'rgb(var(--surface-overlay))',
-                    border: '1px solid rgb(var(--surface-border))',
-                    borderRadius: 8,
-                    fontSize: 12,
-                  }}
+                  contentStyle={TOOLTIP_STYLE}
                   labelFormatter={(label: string) => formatDate(label)}
                 />
                 <Line type="monotone" dataKey="close" stroke="rgb(var(--accent))" dot={false} strokeWidth={1.6} name="Kurs" />

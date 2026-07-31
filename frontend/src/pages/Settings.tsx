@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ACCOUNT_KIND_LABELS, ACCOUNT_KINDS, ALERT_KIND_LABELS, rollUp, TAX_REGIMES, TAX_REGIME_LABELS } from '@portfolio/shared';
 import type { AccountKind, AlertKind, Portfolio, TaxRegime } from '@portfolio/shared';
 import { Card, DataTable, ErrorBanner, Field, Modal, Spinner, Toast, useToast } from '@/components/ui';
@@ -7,8 +8,32 @@ import { formatDate, formatDateTime, formatPln, relativeTime } from '@/lib/forma
 import { useAsync } from '@/lib/useAsync';
 import { useApp } from '@/state/app';
 
+/**
+ * Zakładki ustawień.
+ *
+ * Strona miała jedenaście kart w jednej kolumnie — do zadań cyklicznych trzeba
+ * było przewinąć wszystko, co po drodze. Podział idzie za tym, jak często się
+ * z czegoś korzysta: portfele i konta na wierzchu, diagnostyka na końcu.
+ */
+const SETTINGS_TABS = [
+  { id: 'portfele', label: 'Portfele i konta' },
+  { id: 'ai', label: 'Funkcje AI' },
+  { id: 'powiadomienia', label: 'Powiadomienia' },
+  { id: 'zaawansowane', label: 'Zaawansowane' },
+] as const;
+
+type SettingsTab = (typeof SETTINGS_TABS)[number]['id'];
+
 export function Settings() {
   const { portfolios, refreshPortfolios, status, refreshStatus } = useApp();
+  /*
+   * Zakładka siedzi w adresie, żeby dało się podesłać link wprost do sekcji
+   * („ustaw klucz w /ustawienia?sekcja=ai") i żeby cofnięcie w przeglądarce
+   * wracało tam, gdzie użytkownik był.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = (SETTINGS_TABS.find((t) => t.id === searchParams.get('sekcja'))?.id ?? 'portfele') as SettingsTab;
+  const setTab = (next: SettingsTab) => setSearchParams(next === 'portfele' ? {} : { sekcja: next });
   const settings = useAsync(() => api.settings.get(), []);
   const jobs = useAsync(() => api.status.jobs(), []);
   const { toast, show, dismiss } = useToast();
@@ -45,245 +70,255 @@ export function Settings() {
 
   return (
     <div className="space-y-4">
-      <Card title="Portfele">
-        <div className="grid gap-3 p-4 pt-2 sm:grid-cols-5">
-          <Field label="Nazwa">
-            <input className="input" value={newPortfolio.name} onChange={(e) => setNewPortfolio({ ...newPortfolio, name: e.target.value })} placeholder="Główny" />
-          </Field>
-          <Field label="Etykieta">
-            <input className="input" value={newPortfolio.kind} onChange={(e) => setNewPortfolio({ ...newPortfolio, kind: e.target.value })} placeholder="IKE" />
-          </Field>
-          <Field label="Reżim podatkowy">
-            <select className="input" value={newPortfolio.taxRegime} onChange={(e) => setNewPortfolio({ ...newPortfolio, taxRegime: e.target.value as TaxRegime })}>
-              {TAX_REGIMES.map((regime) => (
-                <option key={regime} value={regime}>{TAX_REGIME_LABELS[regime]}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Broker">
-            <input className="input" value={newPortfolio.broker} onChange={(e) => setNewPortfolio({ ...newPortfolio, broker: e.target.value })} placeholder="XTB" />
-          </Field>
-          <div className="flex items-end">
-            <button type="button" className="btn btn-primary" onClick={() => void addPortfolio()} disabled={!newPortfolio.name || busy}>
-              Dodaj portfel
-            </button>
-          </div>
-        </div>
+      <SettingsTabs value={tab} onChange={setTab} />
 
-        <DataTable headers={['Nazwa', 'Etykieta', 'Reżim podatkowy', 'Poduszka', 'Broker', '']} minWidth={720}>
-          {portfolios.map((portfolio) => (
-            <tr key={portfolio.id}>
-              <td className="table-cell font-medium">{portfolio.name}</td>
-              <td className="table-cell text-content-secondary">{portfolio.kind ?? '—'}</td>
-              <td className="table-cell">
-                <select
-                  className="input h-7 w-auto py-0 text-2xs"
-                  value={portfolio.taxRegime}
-                  onChange={(e) =>
-                    void api.portfolios
-                      .update(portfolio.id, { taxRegime: e.target.value })
-                      .then(refreshPortfolios)
-                  }
-                >
-                  {TAX_REGIMES.map((regime) => (
-                    <option key={regime} value={regime}>{TAX_REGIME_LABELS[regime]}</option>
-                  ))}
-                </select>
-              </td>
-              <td className="table-cell">
-                <label className="flex items-center gap-1.5 text-2xs text-content-muted">
-                  <input
-                    type="checkbox"
-                    checked={portfolio.emergencyFund}
+      {tab === 'portfele' && (
+        <>
+        <Card title="Portfele">
+          <div className="grid gap-3 p-4 pt-2 sm:grid-cols-5">
+            <Field label="Nazwa">
+              <input className="input" value={newPortfolio.name} onChange={(e) => setNewPortfolio({ ...newPortfolio, name: e.target.value })} placeholder="Główny" />
+            </Field>
+            <Field label="Etykieta">
+              <input className="input" value={newPortfolio.kind} onChange={(e) => setNewPortfolio({ ...newPortfolio, kind: e.target.value })} placeholder="IKE" />
+            </Field>
+            <Field label="Reżim podatkowy">
+              <select className="input" value={newPortfolio.taxRegime} onChange={(e) => setNewPortfolio({ ...newPortfolio, taxRegime: e.target.value as TaxRegime })}>
+                {TAX_REGIMES.map((regime) => (
+                  <option key={regime} value={regime}>{TAX_REGIME_LABELS[regime]}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Broker">
+              <input className="input" value={newPortfolio.broker} onChange={(e) => setNewPortfolio({ ...newPortfolio, broker: e.target.value })} placeholder="XTB" />
+            </Field>
+            <div className="flex items-end">
+              <button type="button" className="btn btn-primary" onClick={() => void addPortfolio()} disabled={!newPortfolio.name || busy}>
+                Dodaj portfel
+              </button>
+            </div>
+          </div>
+          <DataTable headers={['Nazwa', 'Etykieta', 'Reżim podatkowy', 'Poduszka', 'Broker', '']} minWidth={720}>
+            {portfolios.map((portfolio) => (
+              <tr key={portfolio.id}>
+                <td className="table-cell font-medium">{portfolio.name}</td>
+                <td className="table-cell text-content-secondary">{portfolio.kind ?? '—'}</td>
+                <td className="table-cell">
+                  <select
+                    className="input h-7 w-auto py-0 text-2xs"
+                    value={portfolio.taxRegime}
                     onChange={(e) =>
                       void api.portfolios
-                        .update(portfolio.id, { emergencyFund: e.target.checked })
+                        .update(portfolio.id, { taxRegime: e.target.value })
                         .then(refreshPortfolios)
                     }
-                  />
-                  poduszka
-                </label>
-              </td>
-              <td className="table-cell text-content-secondary">{portfolio.broker ?? '—'}</td>
-              <td className="table-cell text-right">
-                <button
-                  type="button"
-                  className="btn btn-ghost px-2 py-0.5 text-2xs"
-                  onClick={() =>
-                    void api.portfolios
-                      .update(portfolio.id, { archived: !portfolio.archived })
-                      .then(refreshPortfolios)
-                  }
-                >
-                  {portfolio.archived ? 'Przywróć' : 'Archiwizuj'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost px-2 py-0.5 text-2xs text-loss"
-                  onClick={() => setPortfolioToDelete(portfolio)}
-                  title="Usuń portfel wraz z transakcjami"
-                >
-                  Usuń
-                </button>
-              </td>
-            </tr>
-          ))}
-        </DataTable>
-        <p className="px-4 pb-3 text-2xs text-content-muted">
-          Reżim podatkowy decyduje o tym, czy portfel wchodzi do raportu PIT-38 — IKE i IKZE są z niego wyłączone.
-          Portfel oznaczony jako poduszka jest pomijany w propozycjach rebalansu.
-        </p>
-      </Card>
-
-      <AccountsCard onMessage={show} />
-
-      <AiSettingsCard onMessage={show} />
-
-      <EmergencyFundSettings onMessage={show} />
-
-      <Card title="Powiadomienia">
-        {settings.loading && <Spinner />}
-        {settings.error && <ErrorBanner message={settings.error} onRetry={settings.reload} />}
-        {settings.data && (
-          <>
-            <ul className="grid gap-2 p-4 pt-2 sm:grid-cols-2 lg:grid-cols-3">
-              {(Object.keys(ALERT_KIND_LABELS) as AlertKind[]).map((kind) => (
-                <li key={kind}>
-                  <label className="flex items-center gap-2 text-sm">
+                  >
+                    {TAX_REGIMES.map((regime) => (
+                      <option key={regime} value={regime}>{TAX_REGIME_LABELS[regime]}</option>
+                    ))}
+                  </select>
+                </td>
+                <td className="table-cell">
+                  <label className="flex items-center gap-1.5 text-2xs text-content-muted">
                     <input
                       type="checkbox"
-                      checked={notifications[kind] !== false}
-                      onChange={(e) => void toggleNotification(kind, e.target.checked)}
+                      checked={portfolio.emergencyFund}
+                      onChange={(e) =>
+                        void api.portfolios
+                          .update(portfolio.id, { emergencyFund: e.target.checked })
+                          .then(refreshPortfolios)
+                      }
                     />
-                    {ALERT_KIND_LABELS[kind]}
+                    poduszka
                   </label>
+                </td>
+                <td className="table-cell text-content-secondary">{portfolio.broker ?? '—'}</td>
+                <td className="table-cell text-right">
+                  <button
+                    type="button"
+                    className="btn btn-ghost px-2 py-0.5 text-2xs"
+                    onClick={() =>
+                      void api.portfolios
+                        .update(portfolio.id, { archived: !portfolio.archived })
+                        .then(refreshPortfolios)
+                    }
+                  >
+                    {portfolio.archived ? 'Przywróć' : 'Archiwizuj'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost px-2 py-0.5 text-2xs text-loss"
+                    onClick={() => setPortfolioToDelete(portfolio)}
+                    title="Usuń portfel wraz z transakcjami"
+                  >
+                    Usuń
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </DataTable>
+          <p className="px-4 pb-3 text-2xs text-content-muted">
+            Reżim podatkowy decyduje o tym, czy portfel wchodzi do raportu PIT-38 — IKE i IKZE są z niego wyłączone.
+            Portfel oznaczony jako poduszka jest pomijany w propozycjach rebalansu.
+          </p>
+        </Card>
+        <AccountsCard onMessage={show} />
+        </>
+      )}
+
+      {tab === 'ai' && (
+        <>
+        <AiSettingsCard onMessage={show} />
+        </>
+      )}
+
+      {tab === 'powiadomienia' && (
+        <>
+        <Card title="Powiadomienia">
+          {settings.loading && <Spinner />}
+          {settings.error && <ErrorBanner message={settings.error} onRetry={settings.reload} />}
+          {settings.data && (
+            <>
+              <ul className="grid gap-2 p-4 pt-2 sm:grid-cols-2 lg:grid-cols-3">
+                {(Object.keys(ALERT_KIND_LABELS) as AlertKind[]).map((kind) => (
+                  <li key={kind}>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={notifications[kind] !== false}
+                        onChange={(e) => void toggleNotification(kind, e.target.checked)}
+                      />
+                      {ALERT_KIND_LABELS[kind]}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+              <TelegramFields
+                configured={status?.features.telegram ?? false}
+                onMessage={show}
+                onSaved={() => void refreshStatus()}
+              />
+            </>
+          )}
+        </Card>
+        </>
+      )}
+
+      {tab === 'zaawansowane' && (
+        <>
+        <EmergencyFundSettings onMessage={show} />
+        <Card title="Progi ostrzeżeń">
+          {settings.data && (
+            <div className="grid gap-3 p-4 pt-2 sm:grid-cols-3">
+              <ThresholdInput
+                label="Pojedyncza spółka powyżej %"
+                settingKey="concentrationInstrumentBp"
+                value={settings.data.concentrationInstrumentBp as number}
+                onSaved={settings.reload}
+              />
+              <ThresholdInput
+                label="Sektor powyżej %"
+                settingKey="concentrationSectorBp"
+                value={settings.data.concentrationSectorBp as number}
+                onSaved={settings.reload}
+              />
+              <ThresholdInput
+                label="Zmiana dzienna powyżej %"
+                settingKey="dailyMoveThresholdBp"
+                value={settings.data.dailyMoveThresholdBp as number}
+                onSaved={settings.reload}
+              />
+            </div>
+          )}
+        </Card>
+        <Card title="Kopia zapasowa i eksport">
+          <div className="flex flex-wrap gap-2 p-4 pt-2">
+            <a className="btn" href={api.exportUrls.json} download>
+              Pełny eksport JSON
+            </a>
+            <a className="btn" href={api.exportUrls.transactionsCsv} download>
+              Transakcje CSV
+            </a>
+            <button type="button" className="btn" onClick={() => void api.analytics.snapshot().then(() => show('Snapshot zapisany', 'success'))}>
+              Zapisz snapshot portfela
+            </button>
+            <button type="button" className="btn" onClick={() => void api.analytics.refreshBenchmarks().then(() => show('Benchmarki odświeżone', 'success'))}>
+              Odśwież benchmarki
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void api.corporate.refresh().then((r) => show(r.message, 'success'))}
+            >
+              Odśwież dane dywidendowe
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                void api.corporate
+                  .classify()
+                  .then((r) =>
+                    show(
+                      r.updated === 0
+                        ? 'Nic do uzupełnienia — wszystkie instrumenty mają klasę i sektor.'
+                        : `Uzupełniono ${r.updated} instrumentów${r.changes.length > 0 ? ` (${r.changes.map((c) => `${c.symbol}: ${c.from}→${c.to}`).join(', ')})` : ''}`,
+                      'success',
+                    ),
+                  )
+                  .catch(() => show('Nie udało się rozpoznać instrumentów', 'error'))
+              }
+            >
+              Rozpoznaj typy i sektory
+            </button>
+          </div>
+        </Card>
+        <DuplicatesCard onMessage={show} />
+        <EtfHoldingsEditor onMessage={show} />
+        <Card title="Stan systemu" action={<button type="button" className="btn btn-ghost text-2xs" onClick={() => void refreshStatus()}>Odśwież</button>}>
+          {status && (
+            <dl className="grid gap-2 p-4 pt-2 text-sm sm:grid-cols-3">
+              <Info label="Wersja" value={status.version} />
+              <Info label="Waluta bazowa" value={status.baseCurrency} />
+              <Info label="Ostatnie ceny" value={relativeTime(status.lastPriceUpdate)} />
+              <Info label="Ostatnie kursy NBP" value={status.lastFxUpdate ?? '—'} />
+              <Info label="Ostatni snapshot" value={status.lastSnapshot ?? '—'} />
+              <Info label="Analiza AI" value={status.features.ai ? 'włączona' : 'wyłączona'} />
+            </dl>
+          )}
+          {status && status.providers.length > 0 && (
+            <ul className="border-t border-surface-border px-4 py-3 text-2xs">
+              {status.providers.map((provider) => (
+                <li key={provider.id} className="flex items-center gap-2 py-0.5">
+                  <span className={`h-2 w-2 rounded-full ${provider.healthy ? 'bg-gain' : 'bg-loss'}`} />
+                  <span className="font-medium">{provider.id}</span>
+                  <span className="text-content-muted">
+                    {provider.healthy ? `ostatni sukces ${relativeTime(provider.lastSuccessAt)}` : provider.lastError}
+                  </span>
                 </li>
               ))}
             </ul>
-            <TelegramFields
-              configured={status?.features.telegram ?? false}
-              onMessage={show}
-              onSaved={() => void refreshStatus()}
-            />
-          </>
-        )}
-      </Card>
+          )}
+          {jobs.data && jobs.data.length > 0 && (
+            <div className="max-h-64 overflow-y-auto border-t border-surface-border">
+              <DataTable headers={['Zadanie', 'Start', 'Status', 'Komunikat']}>
+                {jobs.data.slice(0, 20).map((job, index) => (
+                  <tr key={index}>
+                    <td className="table-cell text-2xs">{job.job}</td>
+                    <td className="table-cell text-2xs tabular">{formatDateTime(job.startedAt)}</td>
+                    <td className={`table-cell text-2xs ${job.status === 'error' ? 'text-loss' : 'text-content-secondary'}`}>
+                      {job.status}
+                    </td>
+                    <td className="table-cell text-2xs text-content-muted">{job.message ?? ''}</td>
+                  </tr>
+                ))}
+              </DataTable>
+            </div>
+          )}
+        </Card>
+        </>
+      )}
 
-      <Card title="Progi ostrzeżeń">
-        {settings.data && (
-          <div className="grid gap-3 p-4 pt-2 sm:grid-cols-3">
-            <ThresholdInput
-              label="Pojedyncza spółka powyżej %"
-              settingKey="concentrationInstrumentBp"
-              value={settings.data.concentrationInstrumentBp as number}
-              onSaved={settings.reload}
-            />
-            <ThresholdInput
-              label="Sektor powyżej %"
-              settingKey="concentrationSectorBp"
-              value={settings.data.concentrationSectorBp as number}
-              onSaved={settings.reload}
-            />
-            <ThresholdInput
-              label="Zmiana dzienna powyżej %"
-              settingKey="dailyMoveThresholdBp"
-              value={settings.data.dailyMoveThresholdBp as number}
-              onSaved={settings.reload}
-            />
-          </div>
-        )}
-      </Card>
-
-      <Card title="Kopia zapasowa i eksport">
-        <div className="flex flex-wrap gap-2 p-4 pt-2">
-          <a className="btn" href={api.exportUrls.json} download>
-            Pełny eksport JSON
-          </a>
-          <a className="btn" href={api.exportUrls.transactionsCsv} download>
-            Transakcje CSV
-          </a>
-          <button type="button" className="btn" onClick={() => void api.analytics.snapshot().then(() => show('Snapshot zapisany', 'success'))}>
-            Zapisz snapshot portfela
-          </button>
-          <button type="button" className="btn" onClick={() => void api.analytics.refreshBenchmarks().then(() => show('Benchmarki odświeżone', 'success'))}>
-            Odśwież benchmarki
-          </button>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => void api.corporate.refresh().then((r) => show(r.message, 'success'))}
-          >
-            Odśwież dane dywidendowe
-          </button>
-          <button
-            type="button"
-            className="btn"
-            onClick={() =>
-              void api.corporate
-                .classify()
-                .then((r) =>
-                  show(
-                    r.updated === 0
-                      ? 'Nic do uzupełnienia — wszystkie instrumenty mają klasę i sektor.'
-                      : `Uzupełniono ${r.updated} instrumentów${r.changes.length > 0 ? ` (${r.changes.map((c) => `${c.symbol}: ${c.from}→${c.to}`).join(', ')})` : ''}`,
-                    'success',
-                  ),
-                )
-                .catch(() => show('Nie udało się rozpoznać instrumentów', 'error'))
-            }
-          >
-            Rozpoznaj typy i sektory
-          </button>
-        </div>
-      </Card>
-
-      <DuplicatesCard onMessage={show} />
-
-      <EtfHoldingsEditor onMessage={show} />
-
-      <Card title="Stan systemu" action={<button type="button" className="btn btn-ghost text-2xs" onClick={() => void refreshStatus()}>Odśwież</button>}>
-        {status && (
-          <dl className="grid gap-2 p-4 pt-2 text-sm sm:grid-cols-3">
-            <Info label="Wersja" value={status.version} />
-            <Info label="Waluta bazowa" value={status.baseCurrency} />
-            <Info label="Ostatnie ceny" value={relativeTime(status.lastPriceUpdate)} />
-            <Info label="Ostatnie kursy NBP" value={status.lastFxUpdate ?? '—'} />
-            <Info label="Ostatni snapshot" value={status.lastSnapshot ?? '—'} />
-            <Info label="Analiza AI" value={status.features.ai ? 'włączona' : 'wyłączona'} />
-          </dl>
-        )}
-
-        {status && status.providers.length > 0 && (
-          <ul className="border-t border-surface-border px-4 py-3 text-2xs">
-            {status.providers.map((provider) => (
-              <li key={provider.id} className="flex items-center gap-2 py-0.5">
-                <span className={`h-2 w-2 rounded-full ${provider.healthy ? 'bg-gain' : 'bg-loss'}`} />
-                <span className="font-medium">{provider.id}</span>
-                <span className="text-content-muted">
-                  {provider.healthy ? `ostatni sukces ${relativeTime(provider.lastSuccessAt)}` : provider.lastError}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {jobs.data && jobs.data.length > 0 && (
-          <div className="max-h-64 overflow-y-auto border-t border-surface-border">
-            <DataTable headers={['Zadanie', 'Start', 'Status', 'Komunikat']}>
-              {jobs.data.slice(0, 20).map((job, index) => (
-                <tr key={index}>
-                  <td className="table-cell text-2xs">{job.job}</td>
-                  <td className="table-cell text-2xs tabular">{formatDateTime(job.startedAt)}</td>
-                  <td className={`table-cell text-2xs ${job.status === 'error' ? 'text-loss' : 'text-content-secondary'}`}>
-                    {job.status}
-                  </td>
-                  <td className="table-cell text-2xs text-content-muted">{job.message ?? ''}</td>
-                </tr>
-              ))}
-            </DataTable>
-          </div>
-        )}
-      </Card>
 
       {portfolioToDelete && (
         <DeletePortfolioModal
@@ -1180,5 +1215,48 @@ function DeletePortfolioModal({
         </button>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * Pasek zakładek: przyciski na szerokim ekranie, lista rozwijana na wąskim.
+ *
+ * Cztery zakładki mieszczą się w rzędzie na desktopie, ale na telefonie
+ * zawijałyby się do dwóch linii i zjadały miejsce nad treścią — tam select
+ * niesie tę samą informację w jednym wierszu.
+ */
+function SettingsTabs({ value, onChange }: { value: SettingsTab; onChange: (tab: SettingsTab) => void }) {
+  return (
+    <>
+      <div className="hidden gap-1 border-b border-surface-border sm:flex">
+        {SETTINGS_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className={`-mb-px border-b-2 px-3 py-2 text-sm transition-colors ${
+              tab.id === value
+                ? 'border-accent font-medium text-accent'
+                : 'border-transparent text-content-muted hover:text-content-primary'
+            }`}
+            onClick={() => onChange(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <select
+        className="input sm:hidden"
+        value={value}
+        onChange={(e) => onChange(e.target.value as SettingsTab)}
+        aria-label="Sekcja ustawień"
+      >
+        {SETTINGS_TABS.map((tab) => (
+          <option key={tab.id} value={tab.id}>
+            {tab.label}
+          </option>
+        ))}
+      </select>
+    </>
   );
 }

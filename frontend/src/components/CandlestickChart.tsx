@@ -1,6 +1,7 @@
 import { Bar, Cell, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { Candle } from '@portfolio/shared';
 import { formatDate } from '@/lib/format';
+import { AXIS_TICK, TOOLTIP_STYLE, useAxisDensity } from '@/lib/chart';
 
 /**
  * Wykres świecowy.
@@ -28,13 +29,12 @@ export function CandlestickChart({
   candles,
   sma50,
   sma200,
-  height = 320,
 }: {
   candles: Candle[];
   sma50: (number | null)[];
   sma200: (number | null)[];
-  height?: number;
 }) {
+  const { minTickGap, yAxisWidth } = useAxisDensity();
   const data: CandleDatum[] = candles.map((candle, index) => {
     const open = candle.openE8 / 1e8;
     const close = candle.closeE8 / 1e8;
@@ -66,34 +66,29 @@ export function CandlestickChart({
   const padding = (high - low) * 0.05;
 
   return (
-    <div style={{ height }} className="px-2 pb-2 pt-3">
+    <div className="chart-box-lg px-2 pb-2 pt-3">
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <XAxis
             dataKey="date"
             tickFormatter={formatDate}
-            tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+            tick={AXIS_TICK}
             axisLine={false}
             tickLine={false}
-            minTickGap={50}
+            minTickGap={minTickGap}
           />
           <YAxis
             domain={[low - padding, high + padding]}
-            tick={{ fontSize: 11, fill: 'rgb(var(--content-muted))' }}
+            tick={AXIS_TICK}
             axisLine={false}
             tickLine={false}
-            width={56}
+            width={yAxisWidth}
             // Bez formatowania Recharts wypisuje pełną precyzję zmiennoprzecinkową
             // („85.498236"), co przy wąskiej osi zlewa się w nieczytelny ciąg cyfr.
             tickFormatter={(value: number) => value.toFixed(value >= 100 ? 0 : 2)}
           />
           <Tooltip
-            contentStyle={{
-              background: 'rgb(var(--surface-overlay))',
-              border: '1px solid rgb(var(--surface-border))',
-              borderRadius: 8,
-              fontSize: 12,
-            }}
+            contentStyle={TOOLTIP_STYLE}
             labelFormatter={(label: string) => formatDate(label)}
             content={({ active, payload, label }) => {
               if (!active || !payload?.length) return null;
