@@ -322,6 +322,30 @@ export interface TechnicalResponse {
   candles: Candle[];
   indicators: TechnicalIndicators;
   signals: TechnicalSignal[];
+  /**
+   * Notowanie bieżące. Strona instrumentu bez ceny nie odpowiada na pierwsze
+   * pytanie, z jakim się na nią wchodzi.
+   */
+  price: {
+    priceE8: number;
+    currency: string;
+    /** Zmiana wobec poprzedniego zamknięcia. */
+    changeBp: number | null;
+    changeE8: number | null;
+    /** Znacznik czasu notowania i czy jest nieświeże. */
+    ts: string;
+    stale: boolean;
+    source: string;
+  } | null;
+  /** Pozycja użytkownika, jeśli ten papier jest w portfelu. */
+  holding: {
+    qtyE8: number;
+    avgPriceE8: number;
+    valuePlnMinor: number;
+    unrealizedPlnMinor: number;
+    unrealizedBp: number | null;
+    sharePortfolioBp: number;
+  } | null;
 }
 
 export interface DividendEntry {

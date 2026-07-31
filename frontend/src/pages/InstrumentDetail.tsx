@@ -2,14 +2,16 @@ import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { assetClassLabel } from '@portfolio/shared';
-import type { AssetClass } from '@portfolio/shared';
+import type { AssetClass, TechnicalResponse } from '@portfolio/shared';
 import { CandlestickChart } from '@/components/CandlestickChart';
 import { RatingsCard } from '@/components/RatingsCard';
-import { AssetClassSelect, Card, DataTable, ErrorBanner, Spinner } from '@/components/ui';
+import { AssetClassSelect, Card, DataTable, ErrorBanner, InfoHint, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { PriceMoveFacts, SavedAnalysis } from '@/lib/api';
-import { formatCost, formatDate, toneClass } from '@/lib/format';
+import { formatCost, formatDate, formatPercent, formatPln, formatQuantity, relativeTime, toneClass } from '@/lib/format';
+import { TransactionForm } from '@/components/TransactionForm';
 import { useAsync } from '@/lib/useAsync';
+import { ALL_PORTFOLIOS, useApp } from '@/state/app';
 
 /**
  * Analiza techniczna pojedynczego instrumentu.
@@ -23,6 +25,8 @@ export function InstrumentDetail() {
   const { data, error, loading, reload } = useAsync(() => api.analytics.technical(instrumentId), [instrumentId]);
   const dividends = useAsync(() => api.corporate.dividendHistory(instrumentId), [instrumentId]);
   const [chartMode, setChartMode] = useState<'candles' | 'line'>('candles');
+  const [addOpen, setAddOpen] = useState(false);
+  const { portfolios, selectedPortfolioId } = useApp();
 
   const series = useMemo(() => {
     if (!data) return [];
@@ -39,60 +43,112 @@ export function InstrumentDetail() {
   if (error) return <ErrorBanner message={error} onRetry={reload} />;
   if (!data) return null;
 
-  const { instrument, state, signals } = data;
+  const { instrument, state, signals, price, holding } = data;
 
   return (
     <div className="space-y-4">
-      <header className="flex flex-wrap items-baseline gap-3">
-        <h1 className="text-lg font-semibold">{instrument.symbol}</h1>
-        <span className="text-sm text-content-secondary">{instrument.name}</span>
-        <span className="badge bg-surface-overlay text-content-secondary">
-          {assetClassLabel(instrument.assetClass)}
-        </span>
-        <span className="text-2xs text-content-muted">
-          {instrument.exchange ?? '—'} · {instrument.currency}
-          {instrument.sector ? ` · ${instrument.sector}` : ''}
-        </span>
-        {instrument.assetClass === 'metal' && (
-          <label className="ml-auto flex items-center gap-2 text-2xs text-content-muted">
-            Jednostka pozycji
-            <select
-              className="input h-7 w-auto py-0 text-2xs"
-              value={instrument.unit ?? 'oz'}
-              onChange={(e) => void api.instruments.update(instrumentId, { unit: e.target.value }).then(reload)}
-            >
-              <option value="oz">uncja trojańska</option>
-              <option value="g">gram</option>
-              <option value="kg">kilogram</option>
-            </select>
-          </label>
-        )}
-        <button
-          type="button"
-          className={`btn text-2xs ${instrument.assetClass === 'metal' ? '' : 'ml-auto'}`}
-          onClick={() => void api.instruments.backfill(instrumentId).then(reload)}
-        >
-          Uzupełnij historię notowań
-        </button>
+      {/*
+        Nagłówek prowadzi od tożsamości papieru do jego ceny, a dopiero potem
+        do narzędzi. Wcześniej ceny tu w ogóle nie było — trzeba jej było
+        szukać w tabeli pozycji, mimo że to pierwsza rzecz, po którą się tu
+        wchodzi. Na wąskim ekranie bloki układają się jeden pod drugim,
+        na szerokim cena ląduje po prawej stronie nazwy.
+      */}
+      <header className="card px-4 py-3">
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <h1 className="text-lg font-semibold">{instrument.symbol}</h1>
+              <span className="badge bg-surface-overlay text-content-secondary">
+                {assetClassLabel(instrument.assetClass)}
+              </span>
+            </div>
+            <p className="mt-0.5 truncate text-sm text-content-secondary">{instrument.name}</p>
+            <p className="mt-0.5 text-2xs text-content-muted">
+              {[instrument.exchange, instrument.currency, instrument.sector, instrument.country]
+                .filter(Boolean)
+                .join(' · ')}
+            </p>
+          </div>
+
+          <PriceHeadline price={price} state={state} />
+        </div>
+
+        {holding && <HoldingStrip holding={holding} currency={instrument.currency} />}
+
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-surface-border pt-3">
+          {instrument.assetClass === 'metal' && (
+            <label className="flex items-center gap-2 text-2xs text-content-muted">
+              Jednostka pozycji
+              <select
+                className="input h-7 w-auto py-0 text-2xs"
+                value={instrument.unit ?? 'oz'}
+                onChange={(e) => void api.instruments.update(instrumentId, { unit: e.target.value }).then(reload)}
+              >
+                <option value="oz">uncja trojańska</option>
+                <option value="g">gram</option>
+                <option value="kg">kilogram</option>
+              </select>
+            </label>
+          )}
+          <button
+            type="button"
+            className="btn text-2xs"
+            onClick={() => void api.instruments.backfill(instrumentId).then(reload)}
+          >
+            Uzupełnij historię notowań
+          </button>
+          {/* Skrót do transakcji z poziomu papieru — bez niego trzeba było
+              przejść do innej zakładki i wyszukać go tam od nowa. */}
+          <button type="button" className="btn btn-primary ml-auto text-2xs" onClick={() => setAddOpen(true)}>
+            Dodaj transakcję
+          </button>
+        </div>
       </header>
 
-      <ClassificationCard instrument={instrument} onSaved={reload} />
-
-      <PriceMoveCard instrumentId={instrumentId} />
-
-      <InstrumentRatings instrumentId={instrumentId} />
-
+      {/*
+        Kolejność sekcji idzie od tego, po co się tu wchodzi, do tego, co się
+        robi rzadko. Wcześniej edycja sektora i komentarz modelu stały przed
+        wykresem — czyli ustawienia zasłaniały treść.
+      */}
       <StaleDataNotice asOf={state.asOf} />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatTile label="RSI (14)" value={state.rsi === null ? '—' : state.rsi.toFixed(1)} tone={rsiTone(state.rsiZone)} />
+      {/*
+        Kafelki opisują stan waloru, a nie stan naszej bazy danych. „Świec
+        w historii" i „Sygnałów" mówiły o tym drugim — liczba pobranych świec
+        nie jest informacją o spółce, a liczba sygnałów i tak jest widoczna
+        w sekcji niżej. W ich miejsce wchodzą wskaźniki, które faktycznie
+        coś rozstrzygają.
+      */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatTile
+          label="RSI (14)"
+          value={state.rsi === null ? '—' : state.rsi.toFixed(1)}
+          tone={rsiTone(state.rsiZone)}
+          hint={zoneHint(state.rsiZone)}
+          info="Wskaźnik siły względnej z 14 sesji, w skali 0–100. Powyżej 70 mówi się o wykupieniu, poniżej 30 o wyprzedaniu — w silnym trendzie skrajne wartości potrafią jednak utrzymywać się tygodniami."
+        />
         <StatTile
           label="Układ średnich"
           value={state.trend === 'bullish' ? 'SMA50 > SMA200' : state.trend === 'bearish' ? 'SMA50 < SMA200' : '—'}
           tone={state.trend === 'bullish' ? 'gain' : state.trend === 'bearish' ? 'loss' : 'neutral'}
+          hint={state.trend === 'bullish' ? 'trend wzrostowy' : state.trend === 'bearish' ? 'trend spadkowy' : undefined}
+          info="Położenie średniej z 50 sesji względem średniej z 200. Wskaźnik opóźniony — potwierdza trend, który już trwa, zamiast go zapowiadać."
         />
-        <StatTile label="Świec w historii" value={String(data.candles.length)} tone="neutral" />
-        <StatTile label="Sygnałów" value={String(signals.length)} tone="neutral" />
+        <StatTile
+          label="Zmienność (ATR)"
+          value={state.atrPercent === null ? '—' : `${state.atrPercent.toFixed(2)}%`}
+          tone="neutral"
+          hint="typowy ruch dzienny"
+          info="Średni rzeczywisty zakres z 14 sesji jako procent ceny. Nie wskazuje kierunku — służy do oceny, czy dany ruch jest duży jak na ten konkretny walor."
+        />
+        <StatTile
+          label="Od minimum roku"
+          value={state.fromYearLowPercent === null ? '—' : `+${state.fromYearLowPercent.toFixed(1)}%`}
+          tone="neutral"
+          hint={state.fromYearHighPercent === null ? undefined : `od szczytu ${state.fromYearHighPercent.toFixed(1)}%`}
+          info="Położenie kursu w rocznym zakresie wahań. Pokazuje, czy walor jest bliżej dołka, czy szczytu ostatnich dwunastu miesięcy."
+        />
       </div>
 
       <Card
@@ -164,6 +220,10 @@ export function InstrumentDetail() {
         )}
       </Card>
 
+      <InstrumentRatings instrumentId={instrumentId} />
+
+      <PriceMoveCard instrumentId={instrumentId} />
+
       <Card title="Sygnały techniczne">
         {signals.length === 0 ? (
           <p className="px-4 pb-4 pt-2 text-sm text-content-muted">Brak wykrytych przecięć w dostępnej historii.</p>
@@ -203,6 +263,23 @@ export function InstrumentDetail() {
           </div>
         )}
       </Card>
+
+      {/* Klasyfikacja to ustawienie, nie treść — zmienia się raz, przy
+          zakładaniu instrumentu, więc siedzi na końcu strony. */}
+      <ClassificationCard instrument={instrument} onSaved={reload} />
+
+      {addOpen && (
+        <TransactionForm
+          defaultPortfolioId={selectedPortfolioId === ALL_PORTFOLIOS ? (portfolios[0]?.id ?? 1) : selectedPortfolioId}
+          defaultInstrumentId={instrumentId}
+          defaultCurrency={instrument.currency}
+          onClose={() => setAddOpen(false)}
+          onSaved={() => {
+            setAddOpen(false);
+            reload();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -600,15 +677,42 @@ const COUNTRY_HINTS = [
   'Świat',
 ];
 
-function StatTile({ label, value, tone }: { label: string; value: string; tone: 'gain' | 'loss' | 'warn' | 'neutral' }) {
+function StatTile({
+  label,
+  value,
+  tone,
+  hint,
+  info,
+}: {
+  label: string;
+  value: string;
+  tone: 'gain' | 'loss' | 'warn' | 'neutral';
+  /** Krótkie doprecyzowanie pod wartością. */
+  hint?: string;
+  /** Wyjaśnienie wskaźnika pod ikoną „i". */
+  info?: string;
+}) {
   const toneClass =
     tone === 'gain' ? 'text-gain' : tone === 'loss' ? 'text-loss' : tone === 'warn' ? 'text-warn' : '';
   return (
     <div className="card px-4 py-3">
-      <div className="text-2xs font-medium uppercase tracking-wider text-content-muted">{label}</div>
+      <div className="flex items-center text-2xs font-medium uppercase tracking-wider text-content-muted">
+        {label}
+        {info && <InfoHint text={info} />}
+      </div>
+      {/* Wartość mniejsza niż w nagłówku ceny — te liczby są dopowiedzeniem,
+          nie główną odpowiedzią, a jednakowa wielkość zacierałaby hierarchię. */}
       <div className={`tabular mt-1 text-lg font-semibold ${toneClass}`}>{value}</div>
+      {hint && <div className="mt-0.5 truncate text-2xs text-content-muted">{hint}</div>}
     </div>
   );
+}
+
+/** Krótki opis strefy RSI — pełne wyjaśnienie siedzi pod ikoną „i". */
+function zoneHint(zone: string | null): string | undefined {
+  if (zone === 'overbought') return 'strefa wykupienia';
+  if (zone === 'oversold') return 'strefa wyprzedania';
+  return undefined;
 }
 
 function rsiTone(zone: string | null): 'gain' | 'loss' | 'warn' | 'neutral' {
@@ -660,5 +764,106 @@ function StaleDataNotice({ asOf }: { asOf: string | null }) {
       Wskaźniki liczone z notowań z {formatDate(asOf)} — {ageDays} dni temu. Użyj „Uzupełnij historię notowań",
       żeby je odświeżyć.
     </div>
+  );
+}
+
+/**
+ * Cena bieżąca — najważniejsza liczba na tej stronie.
+ *
+ * Duża, wyrównana do prawej na szerokim ekranie, pod nazwą na wąskim.
+ * Obok niej zmiana dzienna w obu ujęciach (kwotowo i procentowo), bo jedno
+ * bez drugiego zmusza do liczenia w głowie: 2% na papierze po 5 zł to co
+ * innego niż 2% na papierze po 500 zł.
+ */
+function PriceHeadline({
+  price,
+  state,
+}: {
+  price: TechnicalResponse['price'];
+  state: { fromYearHighPercent: number | null; fromYearLowPercent: number | null };
+}) {
+  if (!price) {
+    return (
+      <div className="text-right">
+        <div className="text-2xl font-semibold text-content-muted">—</div>
+        <div className="text-2xs text-content-muted">Brak notowania</div>
+      </div>
+    );
+  }
+
+  const value = price.priceE8 / 1e8;
+  const change = price.changeE8 === null ? null : price.changeE8 / 1e8;
+
+  return (
+    <div className="text-left sm:text-right">
+      <div className="tabular text-2xl font-semibold leading-none">
+        {value.toFixed(value < 10 ? 4 : 2)}
+        <span className="ml-1.5 text-sm font-normal text-content-muted">{price.currency}</span>
+      </div>
+
+      <div className={`tabular mt-1 text-sm ${toneClass(price.changeBp)}`}>
+        {change !== null && (
+          <>
+            {change > 0 ? '+' : ''}
+            {change.toFixed(Math.abs(change) < 10 ? 4 : 2)}
+          </>
+        )}
+        {price.changeBp !== null && (
+          <span className={change !== null ? 'ml-2' : ''}>{formatPercent(price.changeBp, { sign: true })}</span>
+        )}
+        {change === null && price.changeBp === null && <span className="text-content-muted">bez zmiany odniesienia</span>}
+      </div>
+
+      <div className="mt-1 flex flex-wrap gap-x-3 text-2xs text-content-muted sm:justify-end">
+        <span>{price.stale ? 'notowanie nieaktualne' : relativeTime(price.ts)}</span>
+        {state.fromYearHighPercent !== null && (
+          <span>
+            od szczytu roku {state.fromYearHighPercent.toFixed(1)}%
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Pasek pozycji — pokazywany tylko wtedy, gdy papier jest w portfelu.
+ *
+ * Odpowiada na pytanie „ile mam i jak na tym wychodzę", zanim użytkownik
+ * zejdzie do wskaźników technicznych. Na wąskim ekranie dwie kolumny,
+ * na szerokim cztery — układ pozostaje czytelny w obu.
+ */
+function HoldingStrip({
+  holding,
+  currency,
+}: {
+  holding: NonNullable<TechnicalResponse['holding']>;
+  currency: string;
+}) {
+  return (
+    <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-surface-border pt-3 sm:grid-cols-4">
+      <div>
+        <dt className="text-2xs uppercase tracking-wide text-content-muted">Posiadam</dt>
+        <dd className="tabular mt-0.5 text-sm font-medium">{formatQuantity(holding.qtyE8)}</dd>
+      </div>
+      <div>
+        <dt className="text-2xs uppercase tracking-wide text-content-muted">Średnia cena</dt>
+        <dd className="tabular mt-0.5 text-sm">
+          {(holding.avgPriceE8 / 1e8).toFixed(2)}
+          <span className="ml-1 text-2xs text-content-muted">{currency}</span>
+        </dd>
+      </div>
+      <div>
+        <dt className="text-2xs uppercase tracking-wide text-content-muted">Wartość</dt>
+        <dd className="tabular mt-0.5 text-sm">{formatPln(holding.valuePlnMinor)}</dd>
+      </div>
+      <div>
+        <dt className="text-2xs uppercase tracking-wide text-content-muted">Wynik</dt>
+        <dd className={`tabular mt-0.5 text-sm font-medium ${toneClass(holding.unrealizedPlnMinor)}`}>
+          {formatPln(holding.unrealizedPlnMinor, { sign: true })}
+          <span className="ml-1.5 text-2xs">{formatPercent(holding.unrealizedBp, { sign: true })}</span>
+        </dd>
+      </div>
+    </dl>
   );
 }

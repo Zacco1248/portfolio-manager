@@ -181,6 +181,14 @@ export const api = {
             trend: string | null;
             /** Data świecy, z której policzono wskaźniki. */
             asOf: string | null;
+            macdHistogram: number | null;
+            bollingerPercent: number | null;
+            atrPercent: number | null;
+            stochasticK: number | null;
+            stochasticZone: string | null;
+            momentum20: number | null;
+            fromYearHighPercent: number | null;
+            fromYearLowPercent: number | null;
           };
         }
       >(`/analytics/technical${query({ instrumentId })}`),

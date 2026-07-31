@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import { z } from 'zod';
-import { analyticsQuerySchema, idParam, isTaxExempt, technicalQuerySchema } from '@portfolio/shared';
+import { analyticsQuerySchema, changeBp, idParam, isTaxExempt, technicalQuerySchema } from '@portfolio/shared';
 import type { Candle, DividendEntry, DividendSummary, TaxRegime, TechnicalResponse } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
@@ -21,7 +21,7 @@ import { buildStats } from '../services/stats.js';
 import { grossUpWithheld } from '../services/tax.js';
 import { upcomingDividends } from '../services/corporate-actions.js';
 import { activePortfolioIds, buildPositions, toInstrumentDto } from '../services/positions.js';
-import { backfillInstrumentHistory, historyNeedsRefresh } from '../services/prices.js';
+import { backfillInstrumentHistory, getLatestPrice, historyNeedsRefresh } from '../services/prices.js';
 import { computeIndicators, currentState, detectSignals } from '../services/technical.js';
 import { writeDailySnapshot } from '../services/snapshots.js';
 
@@ -135,12 +135,64 @@ analyticsRouter.get(
     }));
 
     const indicators = computeIndicators(candles);
+
+    /*
+     * Cena i pozycja idą razem ze wskaźnikami, bo strona instrumentu zaczyna
+     * się od pytania „ile to kosztuje i ile mam" — wskaźniki techniczne są
+     * odpowiedzią na pytanie zadawane później.
+     */
+    const latest = getLatestPrice(instrument.id, instrument.currency);
+    const changeE8 =
+      latest?.prevCloseE8 != null ? latest.priceE8 - latest.prevCloseE8 : null;
+
+    const position = buildPositions()
+      .positions.filter((p) => p.instrument.id === instrument.id)
+      // Ten sam papier może leżeć w kilku portfelach — pokazujemy sumę.
+      .reduce<TechnicalResponse['holding']>((acc, p) => {
+        if (!acc) {
+          return {
+            qtyE8: p.qtyE8,
+            avgPriceE8: p.avgPriceE8,
+            valuePlnMinor: p.valuePlnMinor,
+            unrealizedPlnMinor: p.unrealizedPlnMinor,
+            unrealizedBp: p.unrealizedBp,
+            sharePortfolioBp: p.sharePortfolioBp,
+          };
+        }
+        const qtyE8 = acc.qtyE8 + p.qtyE8;
+        return {
+          qtyE8,
+          // Średnia ważona ilością, nie zwykła — inaczej mała pozycja
+          // zaważyłaby na wyniku tak samo jak duża.
+          avgPriceE8: Math.round((acc.avgPriceE8 * acc.qtyE8 + p.avgPriceE8 * p.qtyE8) / (qtyE8 || 1)),
+          valuePlnMinor: acc.valuePlnMinor + p.valuePlnMinor,
+          unrealizedPlnMinor: acc.unrealizedPlnMinor + p.unrealizedPlnMinor,
+          unrealizedBp: changeBp(
+            acc.valuePlnMinor + p.valuePlnMinor,
+            acc.valuePlnMinor + p.valuePlnMinor - (acc.unrealizedPlnMinor + p.unrealizedPlnMinor),
+          ),
+          sharePortfolioBp: acc.sharePortfolioBp + p.sharePortfolioBp,
+        };
+      }, null);
+
     const response: TechnicalResponse & { state: ReturnType<typeof currentState> } = {
       instrument: toInstrumentDto(instrument),
       candles,
       indicators,
       signals: detectSignals(candles, indicators),
       state: currentState(indicators, candles),
+      price: latest
+        ? {
+            priceE8: latest.priceE8,
+            currency: latest.currency,
+            changeE8,
+            changeBp: latest.prevCloseE8 ? changeBp(latest.priceE8, latest.prevCloseE8) : null,
+            ts: latest.ts,
+            stale: latest.stale,
+            source: latest.source,
+          }
+        : null,
+      holding: position,
     };
 
     res.json(response);
