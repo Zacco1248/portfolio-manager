@@ -185,8 +185,16 @@ export function grossUpWithheld(
   grossMinor: number,
   taxMinor: number,
   instrument: { symbol: string; country: string | null } | undefined,
+  /**
+   * Czy dywidenda trafiła na rachunek zwolniony z podatku (IKE, IKZE).
+   *
+   * Na takim rachunku płatnik nie potrąca 19% — kwota, która wpłynęła, jest
+   * już kwotą brutto. Ubruttowienie dodawałoby podatek, którego nikt nie
+   * pobrał, i zawyżało zarówno przychód, jak i rzekomo zapłaconą daninę.
+   */
+  taxExempt = false,
 ): { grossMinor: number; taxMinor: number } {
-  if (taxMinor !== 0 || grossMinor <= 0 || !isDomestic(instrument)) {
+  if (taxExempt || taxMinor !== 0 || grossMinor <= 0 || !isDomestic(instrument)) {
     return { grossMinor, taxMinor };
   }
 

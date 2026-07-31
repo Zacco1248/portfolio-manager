@@ -42,7 +42,9 @@ import {
 import { createBond, deleteBond, listBonds, listCpi, upsertCpi } from '../services/bonds.js';
 import {
   addToWatchlist,
+  MAX_BATCHES_ON_DEMAND,
   analyzePendingNews,
+  fetchMarketNews,
   fetchNews,
   listNews,
   listWatchlist,
@@ -293,8 +295,15 @@ toolsRouter.post(
   '/news/refresh',
   asyncHandler(async (_req, res) => {
     const fetched = await fetchNews();
-    const analyzed = await analyzePendingNews();
-    res.json({ ok: true, fetched, analyzed });
+    // Przegląd rynku dokładamy po wiadomościach spółek: `url_hash` jest
+    // unikalny, więc materiał już przypisany do pozycji nie zdubluje się
+    // jako ogólny.
+    const market = await fetchMarketNews();
+    // Kliknięcie „Odśwież" ma nadrobić zaległości, a nie zdjąć jedną paczkę —
+    // przy kilkuset wiadomościach część zostawała bez streszczenia i wyglądało
+    // to na losowe działanie funkcji.
+    const analyzed = await analyzePendingNews({ maxBatches: MAX_BATCHES_ON_DEMAND });
+    res.json({ ok: true, fetched, market, analyzed });
   }),
 );
 

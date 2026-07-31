@@ -48,7 +48,31 @@ function isPolish(instrument: InstrumentRow): boolean {
 }
 
 /**
- * Kanał zbiorczy polskiego serwisu — pobierany tylko dla krajowych papierów.
+ * Kanały zbiorcze polskich serwisów.
+ *
+ * Służą dwóm rzeczom naraz: filtrowane nazwą spółki dokładają wiadomości do
+ * konkretnych pozycji, a czytane bez filtra dają przegląd tego, co dzieje się
+ * na rynku. Wcześniej istniało tylko to pierwsze zastosowanie, więc z Pulsu
+ * Biznesu — który pisze głównie o rynku, nie o pojedynczych spółkach w tytule —
+ * przechodziły pojedyncze wpisy.
+ */
+const MARKET_FEEDS = [
+  { id: 'bankier', url: 'https://www.bankier.pl/rss/wiadomosci.xml' },
+  { id: 'bankier-gielda', url: 'https://www.bankier.pl/rss/gielda.xml' },
+  { id: 'bankier-firma', url: 'https://www.bankier.pl/rss/firma.xml' },
+  { id: 'pb-inwestora', url: 'https://www.pb.pl/rss/puls-inwestora.xml' },
+  { id: 'pb-najnowsze', url: 'https://www.pb.pl/rss/najnowsze.xml' },
+  { id: 'strefa-inwestorow', url: 'https://strefainwestorow.pl/rss.xml' },
+  { id: 'money-gielda', url: 'https://www.money.pl/rss/gielda.xml' },
+  { id: 'interia-gieldy', url: 'https://biznes.interia.pl/gieldy/feed' },
+  { id: 'business-insider', url: 'https://businessinsider.com.pl/.feed' },
+] as const;
+
+/** Ile wpisów z jednego kanału trafia do przeglądu rynku. */
+const MARKET_NEWS_PER_FEED = 12;
+
+/**
+ * Kanał zbiorczy przypisany do konkretnego papieru — tylko dla krajowych.
  *
  * Gotówka i obligacje detaliczne odpadają z tego samego powodu co przy
  * wyszukiwarce: nie mają nazwy, którą dałoby się sensownie odnaleźć
@@ -101,20 +125,7 @@ const SOURCES: FeedSource[] = [
   },
   // Kanały zbiorcze polskich serwisów. Filtrujemy je po nazwie spółki, więc
   // jeden pobrany kanał obsługuje wszystkie krajowe pozycje naraz.
-  { id: 'bankier', urlFor: polishFeed('https://www.bankier.pl/rss/wiadomosci.xml') },
-  { id: 'bankier-gielda', urlFor: polishFeed('https://www.bankier.pl/rss/gielda.xml') },
-  { id: 'bankier-firma', urlFor: polishFeed('https://www.bankier.pl/rss/firma.xml') },
-  { id: 'pb-inwestora', urlFor: polishFeed('https://www.pb.pl/rss/puls-inwestora.xml') },
-  { id: 'pb-najnowsze', urlFor: polishFeed('https://www.pb.pl/rss/najnowsze.xml') },
-  /*
-   * Kanały dołożone po tym, jak okazało się, że dwa serwisy dają zbyt wąskie
-   * pokrycie — sprawdzone pod kątem tego, czy faktycznie oddają wpisy
-   * i czy treść da się potem odczytać w czytniku.
-   */
-  { id: 'strefa-inwestorow', urlFor: polishFeed('https://strefainwestorow.pl/rss.xml') },
-  { id: 'money-gielda', urlFor: polishFeed('https://www.money.pl/rss/gielda.xml') },
-  { id: 'interia-gieldy', urlFor: polishFeed('https://biznes.interia.pl/gieldy/feed') },
-  { id: 'business-insider', urlFor: polishFeed('https://businessinsider.com.pl/.feed') },
+  ...MARKET_FEEDS.map((feed) => ({ id: feed.id, urlFor: polishFeed(feed.url) })),
 ];
 
 function yahooSymbol(instrument: InstrumentRow): string | null {
@@ -228,12 +239,48 @@ export async function fetchNewsFor(targets: InstrumentRow[]): Promise<string> {
  * Analiza AI dla wiadomości, które jej jeszcze nie mają.
  * Bez klucza API nic nie robi — to nie jest błąd, tylko tryb okrojony.
  */
-export async function analyzePendingNews(): Promise<string> {
+/**
+ * Ile partii przetwarza jeden przebieg.
+ *
+ * Model dostaje wiadomości paczkami po `AI_NEWS_BATCH_LIMIT` (domyślnie 25).
+ * Pojedyncza paczka wystarcza zadaniu cyklicznemu, które chodzi co godzinę,
+ * ale przy ręcznym odświeżeniu zostawiała zaległości: przy stu kilkudziesięciu
+ * wiadomościach część miała streszczenie, a część nie, i wyglądało to na
+ * losowe działanie funkcji. Górny limit jest po to, żeby jedno kliknięcie nie
+ * przepuściło przez model całej historii naraz.
+ */
+export const MAX_BATCHES_ON_DEMAND = 8;
+
+export async function analyzePendingNews(options: { maxBatches?: number } = {}): Promise<string> {
   // Powód bierzemy z konfiguracji, zamiast zgadywać: funkcja bywa wyłączona
   // mimo obecnego klucza, a poprzedni komunikat obwiniał zawsze brak klucza.
   const availability = checkFeature('news');
   if (!availability.enabled) return `analiza AI pominięta — ${availability.reason ?? 'funkcja niedostępna'}`;
 
+  const maxBatches = Math.max(options.maxBatches ?? 1, 1);
+  let analyzed = 0;
+
+  for (let batch = 0; batch < maxBatches; batch += 1) {
+    const done = await analyzeOneBatch();
+    analyzed += done;
+    // Mniej niż pełna paczka znaczy, że kolejka się skończyła.
+    if (done < config.ai.batchLimit) break;
+  }
+
+  const left = db
+    .select()
+    .from(newsItems)
+    .where(isNull(newsItems.aiAnalyzedAt))
+    .all().length;
+
+  if (analyzed === 0) return left === 0 ? 'brak wiadomości do analizy' : 'model nie zwrócił analiz';
+  return left > 0
+    ? `przeanalizowano ${analyzed} wiadomości, w kolejce zostaje ${left}`
+    : `przeanalizowano ${analyzed} wiadomości`;
+}
+
+/** Jedna paczka wysłana do modelu. Zwraca liczbę zapisanych analiz. */
+async function analyzeOneBatch(): Promise<number> {
   const pending = db
     .select()
     .from(newsItems)
@@ -242,7 +289,7 @@ export async function analyzePendingNews(): Promise<string> {
     .limit(config.ai.batchLimit)
     .all();
 
-  if (pending.length === 0) return 'brak wiadomości do analizy';
+  if (pending.length === 0) return 0;
 
   const instrumentMap = new Map(db.select().from(instruments).all().map((i) => [i.id, i]));
 
@@ -273,7 +320,17 @@ export async function analyzePendingNews(): Promise<string> {
     analyzed += 1;
   }
 
-  return `przeanalizowano ${analyzed} wiadomości`;
+  /*
+   * Wiadomości, których model nie objął odpowiedzią, oznaczamy jako
+   * przetworzone bez streszczenia — inaczej wracałyby w każdej kolejnej paczce
+   * i blokowały kolejkę w nieskończoność.
+   */
+  const missing = pending.filter((item) => !results.some((r) => r.id === item.id));
+  for (const item of missing) {
+    db.update(newsItems).set({ aiAnalyzedAt: nowIso() }).where(eq(newsItems.id, item.id)).run();
+  }
+
+  return analyzed;
 }
 
 export interface NewsQuery {
@@ -398,6 +455,56 @@ export async function fetchNewsForInstrument(instrumentId: number): Promise<stri
   return fetchNewsFor([instrument]);
 }
 
+
+/**
+ * Przegląd rynku prosto z kanałów serwisów, bez wiązania z konkretną spółką.
+ *
+ * Kanały zbiorcze filtrowane nazwą spółki oddawały pojedyncze wpisy: Puls
+ * Biznesu pisze o rynku, a nie o tickerach w tytule, więc prawie wszystko
+ * odpadało. Tutaj bierzemy je bez filtra — wpis bez `instrumentId` jest
+ * materiałem ogólnym i nie zaśmieca listy wiadomości żadnej pozycji.
+ *
+ * Adresy pochodzą wprost od wydawcy, nie z pośrednika, więc podgląd treści
+ * w aplikacji działa — w przeciwieństwie do linków z Google News.
+ */
+export async function fetchMarketNews(): Promise<string> {
+  let inserted = 0;
+  let failed = 0;
+
+  for (const feed of MARKET_FEEDS) {
+    try {
+      const entries = parseFeed(await fetchText(feed.url, { retries: 1, minIntervalMs: 800 }));
+
+      for (const entry of entries.slice(0, MARKET_NEWS_PER_FEED)) {
+        // Ten sam filtr co przy kanale kierowanym — odsiewa materiały
+        // niezwiązane z rynkiem, których w kanałach ogólnych bywa sporo.
+        if (!looksMarketRelated(stripPublisher(entry.title))) continue;
+
+        const result = db
+          .insert(newsItems)
+          .values({
+            instrumentId: null,
+            source: feed.id,
+            url: entry.url,
+            urlHash: urlHash(entry.url),
+            title: stripPublisher(entry.title),
+            publishedAt: entry.publishedAt,
+            rawSummary: cleanSummary(entry.summary),
+          })
+          .onConflictDoNothing()
+          .run();
+        inserted += result.changes;
+      }
+    } catch (err) {
+      failed += 1;
+      log.debug(`Kanał rynkowy ${feed.id} nieosiągalny: ${errorMessage(err)}`);
+    }
+  }
+
+  return failed > 0
+    ? `przegląd rynku: ${inserted} nowych, ${failed} kanałów nieosiągalnych`
+    : `przegląd rynku: ${inserted} nowych`;
+}
 
 /**
  * Wiadomości z otoczenia rynkowego, niezwiązane z konkretną spółką.

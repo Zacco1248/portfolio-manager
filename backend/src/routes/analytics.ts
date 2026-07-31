@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import { z } from 'zod';
-import { analyticsQuerySchema, idParam, technicalQuerySchema } from '@portfolio/shared';
-import type { Candle, DividendEntry, DividendSummary, TechnicalResponse } from '@portfolio/shared';
+import { analyticsQuerySchema, idParam, isTaxExempt, technicalQuerySchema } from '@portfolio/shared';
+import type { Candle, DividendEntry, DividendSummary, TaxRegime, TechnicalResponse } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { instruments, portfolios, pricesDaily, transactions } from '../db/schema.js';
@@ -158,7 +158,16 @@ analyticsRouter.get('/dividends', (req, res, next) => {
   }
 
   const instrumentMap = new Map(db.select().from(instruments).all().map((i) => [i.id, i]));
-  const portfolioMap = new Map(db.select().from(portfolios).all().map((p) => [p.id, p.name]));
+  const portfolioRows = db.select().from(portfolios).all();
+  const portfolioMap = new Map(portfolioRows.map((p) => [p.id, p.name]));
+  /*
+   * Na rachunku IKE i IKZE płatnik nie potrąca podatku od dywidendy, więc
+   * kwota z wyciągu jest już kwotą brutto. Ubruttowienie doliczałoby tam
+   * podatek, którego nikt nie pobrał.
+   */
+  const exemptPortfolios = new Set(
+    portfolioRows.filter((p) => isTaxExempt(p.taxRegime as TaxRegime)).map((p) => p.id),
+  );
 
   const rows = db
     .select()
@@ -174,7 +183,12 @@ analyticsRouter.get('/dividends', (req, res, next) => {
       const instrument = instrumentMap.get(r.instrumentId!)!;
       // Dywidenda krajowa przychodzi już po potrąceniu 19% i bez osobnego
       // wiersza podatku — bez ubruttowienia brutto równałoby się netto.
-      const { grossMinor, taxMinor } = grossUpWithheld(r.grossMinor, r.taxMinor, instrument);
+      const { grossMinor, taxMinor } = grossUpWithheld(
+        r.grossMinor,
+        r.taxMinor,
+        instrument,
+        exemptPortfolios.has(r.portfolioId),
+      );
 
       return {
         transactionId: r.id,
@@ -198,6 +212,7 @@ analyticsRouter.get('/dividends', (req, res, next) => {
       row.grossMinor,
       row.taxMinor,
       row.instrumentId ? instrumentMap.get(row.instrumentId) : undefined,
+      exemptPortfolios.has(row.portfolioId),
     );
     bucket.grossPlnMinor += Math.round((adjusted.grossMinor * row.fxRateE6) / 1_000_000);
     bucket.taxPlnMinor += Math.round((adjusted.taxMinor * row.fxRateE6) / 1_000_000);

@@ -3,7 +3,7 @@ import { earliestTransactionDate, refreshAllBenchmarks, BENCHMARKS } from '../se
 import { writeDailySnapshot } from '../services/snapshots.js';
 import { evaluateAlerts } from '../services/alerts.js';
 import { refreshDividendHistory } from '../services/corporate-actions.js';
-import { analyzePendingNews, fetchNews } from '../services/news.js';
+import { analyzePendingNews, fetchMarketNews, fetchNews } from '../services/news.js';
 import { refreshAllRecommendations } from '../services/recommendations.js';
 import { refreshFxRates } from '../services/fx.js';
 import { backfillAllHistory, instrumentsNeedingPrices, isMarketHours, refreshQuotes } from '../services/prices.js';
@@ -36,8 +36,14 @@ export function registerDataJobs(schedule: ScheduleFn): void {
   // wywołań modelu na te same wiadomości.
   schedule('news:fetch', '5 * * * *', config.cron.news, async () => {
     const fetched = await fetchNews();
-    const analyzed = await analyzePendingNews();
-    return `${fetched}; ${analyzed}`;
+    const market = await fetchMarketNews();
+    /*
+     * Zadanie chodzi co godzinę, więc dwie paczki na przebieg wystarczą, żeby
+     * kolejka nie rosła — a jednocześnie nie przepuszczają przez model całej
+     * historii naraz po dłuższej przerwie w działaniu aplikacji.
+     */
+    const analyzed = await analyzePendingNews({ maxBatches: 2 });
+    return `${fetched}; ${market}; ${analyzed}`;
   });
 
   // Alerty sprawdzamy częściej niż newsy, ale rzadziej niż ceny.
