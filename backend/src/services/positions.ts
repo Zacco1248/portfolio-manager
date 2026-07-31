@@ -12,11 +12,13 @@ import {
 import type { AssetClass, Instrument, Position, TransactionType } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
-import { bondHoldings, instruments, portfolios, realizedGains, transactions } from '../db/schema.js';
+import { accounts, bondHoldings, instruments, portfolios, realizedGains, transactions } from '../db/schema.js';
 import type { InstrumentRow, PortfolioRow } from '../db/schema.js';
 import { computeFifo, groupForFifo, parseGroupKey } from './fifo.js';
+import type { OpenLot } from './fifo.js';
 import { getLatestPrice } from './prices.js';
 import { valueBond } from './bonds.js';
+import { bondTermsFor } from '@portfolio/shared';
 import type { BondKind } from '@portfolio/shared';
 import type { LatestPrice } from './prices.js';
 
@@ -59,7 +61,61 @@ export interface PositionsResult {
   positions: Position[];
   /** Saldo gotówki per portfel, wyliczone z podpisanych przepływów. */
   cashByPortfolio: Map<number, number>;
+  /** To samo saldo w rozbiciu na konta. Klucz `null` = transakcje bez konta. */
+  cashByAccount: Map<number | null, number>;
   totalValuePlnMinor: number;
+}
+
+/**
+ * Rozbija pozostałe loty FIFO na konta.
+ *
+ * FIFO zostaje jedną kolejką per portfel+instrument — to reguła podatkowa
+ * i nie wolno jej dzielić. Konto odczytujemy dopiero z lotów, które
+ * przetrwały: każdy niesie id transakcji zakupu, a ta zna swoje konto.
+ * Dzięki temu papier kupiony w XTB i dokupiony w PKO pokazuje się na obu
+ * kontach w takich proporcjach, w jakich faktycznie tam leży, a sprzedaż
+ * zdejmuje najstarsze loty — czyli te z konta, na którym kupowano najwcześniej.
+ *
+ * Wartość dzielimy proporcjonalnie do ilości, a resztę z zaokrągleń dokłada
+ * ostatnia porcja — ta sama konwencja co w `consumeLots`, żeby suma części
+ * zgadzała się z całością co do grosza.
+ */
+export function splitByAccount(
+  openLots: OpenLot[],
+  accountOf: Map<number, number | null>,
+  valuePlnMinor: number,
+): { accountId: number | null; qtyE8: number; costPlnMinor: number; valuePlnMinor: number }[] {
+  const buckets = new Map<number | null, { qtyE8: number; costPlnMinor: number }>();
+
+  for (const lot of openLots) {
+    const accountId = accountOf.get(lot.buyTransactionId) ?? null;
+    const bucket = buckets.get(accountId);
+    if (bucket) {
+      bucket.qtyE8 += lot.qtyE8;
+      bucket.costPlnMinor += lot.costPlnMinor;
+    } else {
+      buckets.set(accountId, { qtyE8: lot.qtyE8, costPlnMinor: lot.costPlnMinor });
+    }
+  }
+
+  const entries = [...buckets.entries()];
+  const totalQtyE8 = entries.reduce((sum, [, b]) => sum + b.qtyE8, 0);
+  if (totalQtyE8 <= 0) return [];
+
+  let assigned = 0;
+  return entries.map(([accountId, bucket], index) => {
+    const isLast = index === entries.length - 1;
+    const share = isLast
+      ? valuePlnMinor - assigned
+      : bigintToNumber(mulDiv(BigInt(valuePlnMinor), BigInt(bucket.qtyE8), BigInt(totalQtyE8)));
+    assigned += share;
+    return {
+      accountId,
+      qtyE8: bucket.qtyE8,
+      costPlnMinor: bucket.costPlnMinor,
+      valuePlnMinor: share,
+    };
+  });
 }
 
 /**
@@ -77,7 +133,7 @@ export function buildPositions(portfolioIds?: number[]): PositionsResult {
       : portfolioRows.filter((p) => !p.archived);
   const selectedIds = selected.map((p) => p.id);
   if (selectedIds.length === 0) {
-    return { positions: [], cashByPortfolio: new Map(), totalValuePlnMinor: 0 };
+    return { positions: [], cashByPortfolio: new Map(), cashByAccount: new Map(), totalValuePlnMinor: 0 };
   }
 
   const txRows = db.select().from(transactions).where(inArray(transactions.portfolioId, selectedIds)).all();
@@ -89,10 +145,22 @@ export function buildPositions(portfolioIds?: number[]): PositionsResult {
   const priceCache = new Map<number, LatestPrice | null>();
 
   const cashByPortfolio = new Map<number, number>();
+  const cashByAccount = new Map<number | null, number>();
+  // Mapa „transakcja → konto" zasila rozbicie pozycji na konta niżej.
+  const accountOf = new Map<number, number | null>();
   for (const id of selectedIds) cashByPortfolio.set(id, 0);
   for (const tx of txRows) {
     cashByPortfolio.set(tx.portfolioId, (cashByPortfolio.get(tx.portfolioId) ?? 0) + tx.amountPlnMinor);
+    cashByAccount.set(tx.accountId, (cashByAccount.get(tx.accountId) ?? 0) + tx.amountPlnMinor);
+    accountOf.set(tx.id, tx.accountId);
   }
+  const accountNames = new Map(
+    db
+      .select()
+      .from(accounts)
+      .all()
+      .map((a) => [a.id, a.name]),
+  );
 
   const groups = groupForFifo(txRows);
   const positions: Position[] = [];
@@ -141,7 +209,7 @@ export function buildPositions(portfolioIds?: number[]): PositionsResult {
         firstYearRateBp: bondTerms.firstYearRateBp,
         marginBp: bondTerms.marginBp,
         termMonths: bondTerms.termMonths,
-        capitalization: 'annual',
+        capitalization: bondTerms.capitalization,
       });
       const units = Math.max(Math.round(fifo.remainingQtyE8 / 100_000_000), 1);
       price = {
@@ -190,13 +258,17 @@ export function buildPositions(portfolioIds?: number[]): PositionsResult {
       sharePortfolioBp: 0, // uzupełniane niżej, gdy znamy sumę
       priceStale: price?.stale ?? true,
       fxRateE6,
+      accounts: splitByAccount(fifo.openLots, accountOf, valuePlnMinor).map((slice) => ({
+        ...slice,
+        accountName: slice.accountId === null ? null : (accountNames.get(slice.accountId) ?? null),
+      })),
     });
   }
 
   // Obligacje detaliczne nie mają notowań rynkowych, więc nie przechodzą
   // ścieżką transakcji i cen. Bez doliczenia ich tutaj znikały z wartości
   // portfela, alokacji i rebalansu, mimo że są realnym aktywem.
-  positions.push(...bondPositions(selected));
+  positions.push(...bondPositions(selected, accountNames));
 
   const positionsValue = positions.reduce((sum, p) => sum + p.valuePlnMinor, 0);
   const cashTotal = [...cashByPortfolio.values()].reduce((sum, v) => sum + v, 0);
@@ -208,20 +280,8 @@ export function buildPositions(portfolioIds?: number[]): PositionsResult {
 
   positions.sort((a, b) => b.valuePlnMinor - a.valuePlnMinor);
 
-  return { positions, cashByPortfolio, totalValuePlnMinor };
+  return { positions, cashByPortfolio, cashByAccount, totalValuePlnMinor };
 }
-
-/** Miesiące trwania emisji wg rodzaju obligacji detalicznej. */
-const BOND_TERM_MONTHS: Record<string, number> = {
-  EDO: 120,
-  COI: 48,
-  TOS: 36,
-  ROR: 12,
-  DOR: 24,
-  ROS: 72,
-  ROD: 144,
-  OTS: 3,
-};
 
 /** Warunki emisji zapisane na instrumencie przy imporcie. */
 function readBondTerms(instrument: InstrumentRow): {
@@ -230,6 +290,7 @@ function readBondTerms(instrument: InstrumentRow): {
   firstYearRateBp: number;
   marginBp: number;
   termMonths: number;
+  capitalization: 'annual' | 'none';
   nominalMinor: number;
 } | null {
   if (instrument.assetClass !== 'bond') return null;
@@ -245,7 +306,8 @@ function readBondTerms(instrument: InstrumentRow): {
     purchaseDate,
     firstYearRateBp: Math.round(rate * 100),
     marginBp: typeof meta?.marginPercent === 'number' ? Math.round(meta.marginPercent * 100) : 0,
-    termMonths: BOND_TERM_MONTHS[kind] ?? 120,
+    termMonths: bondTermsFor(kind).termMonths,
+    capitalization: bondTermsFor(kind).capitalization,
     nominalMinor: 10_000,
   };
 }
@@ -257,7 +319,7 @@ function readBondTerms(instrument: InstrumentRow): {
  * Identyfikator instrumentu jest ujemny, żeby nie kolidował z instrumentami
  * z tabeli — interfejs po tym poznaje, że nie ma dla niego strony szczegółów.
  */
-function bondPositions(portfolios: PortfolioRow[]): Position[] {
+function bondPositions(portfolios: PortfolioRow[], accountNames: Map<number, string>): Position[] {
   const ids = portfolios.map((p) => p.id);
   if (ids.length === 0) return [];
 
@@ -312,6 +374,18 @@ function bondPositions(portfolios: PortfolioRow[]): Position[] {
         // Wartość wynika z parametrów emisji, a nie z notowania — nigdy nie jest nieświeża.
         priceStale: false,
         fxRateE6: 1_000_000,
+        // Obligacje kupuje się w całości na jednym koncie, więc rozbicie ma
+        // dokładnie jedną pozycję — ale musi tu być, żeby nie wypadły
+        // z zestawienia kont jako „nieprzypisane".
+        accounts: [
+          {
+            accountId: bond.accountId,
+            accountName: bond.accountId === null ? null : (accountNames.get(bond.accountId) ?? null),
+            qtyE8: bond.count * 100_000_000,
+            costPlnMinor: cost,
+            valuePlnMinor: valuation.currentValueMinor,
+          },
+        ],
       };
     });
 }

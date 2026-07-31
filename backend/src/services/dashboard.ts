@@ -1,5 +1,5 @@
 import { inArray } from 'drizzle-orm';
-import { ASSET_CLASS_LABELS, changeBp, shareBp } from '@portfolio/shared';
+import { assetClassLabel, changeBp, rollUp, shareBp } from '@portfolio/shared';
 import type {
   AllocationSlice,
   AssetClass,
@@ -92,12 +92,7 @@ function buildAllocation(positions: Position[], cashPlnMinor: number): Dashboard
   };
 
   return {
-    assetClass: group(
-      (p) => p.instrument.assetClass,
-      (key) => ASSET_CLASS_LABELS[key as AssetClass] ?? key,
-      true,
-      'cash',
-    ),
+    assetClass: group((p) => p.instrument.assetClass, assetClassLabel, true, 'cash'),
     // Gotówka jest w walucie bazowej, więc trafia do jej koszyka walutowego.
     currency: group((p) => p.instrument.currency, (key) => key, true, config.baseCurrency),
     sector: group((p) => p.instrument.sector, (key) => key, false, ''),
@@ -120,7 +115,7 @@ function topMovers(positions: Position[]): DashboardResponse['topMovers'] {
 function buildWarnings(positions: Position[]): RiskWarning[] {
   const thresholds = loadThresholds();
 
-  const etfIds = positions.filter((p) => p.instrument.assetClass === 'etf').map((p) => p.instrument.id);
+  const etfIds = positions.filter((p) => rollUp(p.instrument.assetClass) === 'etf').map((p) => p.instrument.id);
   const holdingsMap = new Map<number, { symbol: string; weightBp: number }[]>();
   if (etfIds.length > 0) {
     for (const row of db.select().from(instruments).where(inArray(instruments.id, etfIds)).all()) {

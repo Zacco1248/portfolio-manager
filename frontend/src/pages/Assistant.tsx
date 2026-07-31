@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { AiDisclaimer, Card, ErrorBanner, Field, Spinner } from '@/components/ui';
+import { SymbolSearch } from '@/components/SymbolSearch';
 import { ApiError, api } from '@/lib/api';
 import { formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
@@ -24,8 +25,10 @@ export function Assistant() {
       <p className="text-2xs text-content-muted">
         Narzędzia korzystające z modelu językowego. Każde włączasz osobno w Ustawieniach i przy każdym widzisz,
         co dokładnie zostaje wysłane. Bez włączenia funkcji liczby nadal się liczą — lokalnie, jak wszędzie indziej.
+        Model nigdy nie liczy kwot: dostaje gotowe wyniki i tylko je opisuje.
       </p>
 
+      <QuestionCard portfolioId={portfolioId} enabled={enabled('quickQuestion')} />
       <MonthlyCard portfolioId={portfolioId} enabled={enabled('monthlySummary')} />
       <PurchaseCard portfolioId={portfolioId} enabled={enabled('purchaseCheck')} />
       <TaxCard portfolioId={portfolioId} enabled={enabled('taxAssistant')} />
@@ -94,10 +97,11 @@ function MonthlyCard({ portfolioId, enabled }: { portfolioId?: number; enabled: 
   const assist = useAssist<Awaited<ReturnType<typeof api.assist.monthlySummary>>>();
 
   return (
-    <Card
-      title="Podsumowanie miesiąca"
-      action={<FeatureBadge enabled={enabled} />}
-    >
+    <Card title="Podsumowanie miesiąca" action={<FeatureBadge enabled={enabled} />}>
+      <FeatureHelp
+        featureKey="monthlySummary"
+        whenToUse="Po zamknięciu miesiąca, gdy chcesz jednym akapitem opisać, co się w portfelu wydarzyło."
+      />
       <div className="flex flex-wrap items-end gap-3 p-4 pt-2">
         <div className="w-40">
           <Field label="Miesiąc">
@@ -168,10 +172,20 @@ function PurchaseCard({ portfolioId, enabled }: { portfolioId?: number; enabled:
 
   return (
     <Card title="Kontrola przed zakupem" action={<FeatureBadge enabled={enabled} />}>
+      <FeatureHelp featureKey="purchaseCheck" whenToUse="Zanim dołożysz pozycję — pokazuje, jak zmieni się koncentracja i ekspozycja portfela." />
       <div className="flex flex-wrap items-end gap-3 p-4 pt-2">
-        <div className="w-44">
-          <Field label="Instrument">
-            <input className="input" value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="np. IUIT" />
+        <div className="w-64">
+          <Field label="Instrument" hint="Działa też dla spółek spoza portfela.">
+            {/*
+              Podpowiedzi z tej samej wyszukiwarki co przy dodawaniu transakcji —
+              wcześniej trzeba było znać dokładny zapis symbolu na pamięć.
+            */}
+            <SymbolSearch
+              value={symbol}
+              onChange={setSymbol}
+              onPick={(suggestion) => setSymbol(suggestion.symbol)}
+              placeholder="np. IUIT, NVDA…"
+            />
           </Field>
         </div>
         <div className="w-36">
@@ -245,6 +259,7 @@ function TaxCard({ portfolioId, enabled }: { portfolioId?: number; enabled: bool
 
   return (
     <Card title="Asystent podatkowy" action={<FeatureBadge enabled={enabled} />}>
+      <FeatureHelp featureKey="taxAssistant" whenToUse="Przy wypełnianiu PIT-38 albo gdy nie wiesz, jak rozliczyć konkretne zdarzenie." />
       <div className="flex flex-wrap items-end gap-3 p-4 pt-2">
         <div className="w-28">
           <Field label="Rok">
@@ -316,6 +331,7 @@ function DocumentCard({ enabled }: { enabled: boolean }) {
 
   return (
     <Card title="Streszczanie dokumentów" action={<FeatureBadge enabled={enabled} />}>
+      <FeatureHelp featureKey="documentSummary" whenToUse="Gdy masz długi raport spółki albo komunikat i chcesz z niego trzy zdania." />
       <div className="space-y-3 p-4 pt-2">
         <Field label="Tekst raportu, komunikatu albo prospektu">
           <textarea
@@ -358,10 +374,127 @@ function DocumentCard({ enabled }: { enabled: boolean }) {
   );
 }
 
+/**
+ * Krótka instrukcja funkcji, rozwijana pod nagłówkiem karty.
+ *
+ * Opisy pochodzą z `ai-config` na serwerze — tego samego źródła, co lista
+ * w Ustawieniach. Powielenie ich tutaj oznaczałoby dwa teksty do utrzymania,
+ * które prędzej czy później zaczęłyby się rozjeżdżać.
+ */
+function FeatureHelp({ featureKey, whenToUse }: { featureKey: string; whenToUse: string }) {
+  const status = useAsync(() => api.ai.status(), []);
+  const [open, setOpen] = useState(false);
+
+  const info = status.data?.features.find((f) => f.key === featureKey);
+  if (!info) return null;
+
+  return (
+    <div className="border-b border-surface-border px-4 pb-3">
+      <button
+        type="button"
+        className="text-2xs text-accent hover:underline"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+      >
+        {open ? 'Ukryj opis' : 'Co to robi?'}
+      </button>
+
+      {open && (
+        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-2xs">
+          <dt className="text-content-muted">Do czego służy</dt>
+          <dd className="text-content-secondary">{info.description}</dd>
+          <dt className="text-content-muted">Kiedy użyć</dt>
+          <dd className="text-content-secondary">{whenToUse}</dd>
+          <dt className="text-content-muted">Co wychodzi do modelu</dt>
+          <dd className="text-content-secondary">{info.dataSent}</dd>
+        </dl>
+      )}
+    </div>
+  );
+}
+
 function FeatureBadge({ enabled }: { enabled: boolean }) {
   return (
     <span className={`text-2xs ${enabled ? 'text-content-muted' : 'text-warn'}`}>
       {enabled ? 'Funkcja włączona' : 'Wyłączona — włącz w Ustawieniach'}
     </span>
+  );
+}
+
+/** Przykłady, żeby było widać, o co w ogóle można zapytać. */
+const QUESTION_EXAMPLES = [
+  'Czy ma sens zamienić część ETF-a na S&P 500 na fundusz rynków wschodzących?',
+  'Które pozycje najbardziej ciążą wynikowi i dlaczego?',
+  'Czy mój portfel jest nadmiernie skoncentrowany na jednym sektorze?',
+  'Co się stanie ze strukturą, jeśli sprzedam najgorszą pozycję?',
+];
+
+/**
+ * Swobodne pytanie o portfel.
+ *
+ * Model dostaje strukturę portfela bez kwot i opisuje czynniki — nie wydaje
+ * zaleceń. To ograniczenie jest częścią promptu po stronie serwera, a tutaj
+ * mówimy o nim wprost, żeby nie budzić fałszywych oczekiwań.
+ */
+function QuestionCard({ portfolioId, enabled }: { portfolioId?: number; enabled: boolean }) {
+  const [question, setQuestion] = useState('');
+  const assist = useAssist<Awaited<ReturnType<typeof api.assist.question>>>();
+
+  const ask = (text: string) => {
+    setQuestion(text);
+    void assist.run(() => api.assist.question({ portfolioId, question: text }));
+  };
+
+  return (
+    <Card title="Szybkie pytanie" action={<FeatureBadge enabled={enabled} />}>
+      <FeatureHelp
+        featureKey="quickQuestion"
+        whenToUse="Gdy zastanawiasz się nad zmianą w portfelu i chcesz zobaczyć argumenty za i przeciw."
+      />
+
+      <div className="space-y-3 p-4 pt-3">
+        <div className="flex flex-wrap gap-3">
+          <textarea
+            className="input min-h-[4.5rem] flex-1"
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder="np. Czy warto zamienić część akcji polskich na ETF na rynki rozwinięte?"
+          />
+          <button
+            type="button"
+            className="btn btn-primary self-end"
+            disabled={assist.busy || question.trim().length < 3}
+            onClick={() => void assist.run(() => api.assist.question({ portfolioId, question }))}
+          >
+            {assist.busy ? 'Myślę…' : 'Zapytaj'}
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {QUESTION_EXAMPLES.map((example) => (
+            <button
+              key={example}
+              type="button"
+              className="rounded-full border border-surface-border px-2.5 py-1 text-2xs text-content-secondary hover:border-accent hover:text-accent"
+              disabled={assist.busy}
+              onClick={() => ask(example)}
+            >
+              {example}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {assist.error && <ErrorBanner message={assist.error} />}
+      {assist.busy && <Spinner label="Analizuję strukturę portfela…" />}
+
+      {assist.result && (
+        <ModelText
+          text={assist.result.text}
+          reason={assist.result.unavailableReason}
+          disclaimer={assist.result.disclaimer}
+        />
+      )}
+    </Card>
   );
 }

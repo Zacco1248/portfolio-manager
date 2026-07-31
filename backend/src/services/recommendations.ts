@@ -1,5 +1,7 @@
-import { and, desc, eq, gte } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
+import { and, desc, eq, gte } from 'drizzle-orm';
+import { rollUp } from '@portfolio/shared';
+import type { AssetClass } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { analystRatings, instruments } from '../db/schema.js';
@@ -80,6 +82,8 @@ export interface ParsedRating {
   rating: Rating | null;
   broker: string | null;
   targetPriceE8: number | null;
+  /** Waluta ceny docelowej; null, gdy ceny nie odczytano. */
+  targetCurrency: string | null;
   /** Czy nagłówek mówi o podwyższeniu albo obniżeniu wyceny. */
   direction: 'up' | 'down' | null;
 }
@@ -104,12 +108,22 @@ export function parseRecommendation(title: string, summary?: string | null): Par
    * pierwszej lepszej liczby z tytułu — kursu, procentu albo roku.
    */
   const priceMatch =
-    /(?:cen[aęy]\s+docelow[aąej]|wycen[aęy]|warte?\s+|do)\s*:?\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:zł|pln)/i.exec(text) ??
-    /([0-9]+(?:[.,][0-9]+)?)\s*(?:zł|pln)\s*(?:cen[ay]\s+docelow)/i.exec(text);
+    /(?:cen[aęy]\s+docelow[aąej]|wycen[aęy]|warte?\s+|do)\s*:?\s*([0-9]+(?:[.,][0-9]+)?)\s*(zł|pln|usd|eur|\$|€)/i.exec(
+      text,
+    ) ??
+    /([0-9]+(?:[.,][0-9]+)?)\s*(zł|pln|usd|eur|\$|€)\s*(?:cen[ay]\s+docelow)/i.exec(text) ??
+    // Zapis z symbolem przed kwotą: „target price $250".
+    /(?:cen[aęy]\s+docelow[aąej]|target\s+price|wycen[aęy])\s*:?\s*(\$|€)\s*([0-9]+(?:[.,][0-9]+)?)/i.exec(text);
 
-  const targetPriceE8 = priceMatch
-    ? Math.round(Number(priceMatch[1]!.replace(',', '.')) * 100_000_000)
-    : null;
+  const amount = priceMatch?.slice(1).find((group) => group && /^[0-9]+(?:[.,][0-9]+)?$/.test(group));
+  const targetPriceE8 = amount ? Math.round(Number(amount.replace(',', '.')) * 100_000_000) : null;
+
+  /*
+   * Waluta ceny docelowej. Wcześniej regex wymagał „zł", więc dla spółek
+   * notowanych w dolarach czy euro cena docelowa nigdy się nie odczytywała,
+   * a interfejs i tak dopisywał do niej „zł" — czyli mylił jednostki.
+   */
+  const targetCurrency = targetPriceE8 === null ? null : currencyFromMatch(priceMatch!);
 
   /*
    * Kierunek zmiany bywa jedyną konkretną informacją w nagłówku. Polskie
@@ -123,7 +137,22 @@ export function parseRecommendation(title: string, summary?: string | null): Par
       ? 'down'
       : null;
 
-  return { rating, broker, targetPriceE8, direction };
+  return { rating, broker, targetPriceE8, targetCurrency, direction };
+}
+
+/**
+ * Symbol albo skrót waluty z dopasowania → kod ISO.
+ *
+ * Grupy nie mają stałej kolejności: raz kwota jest przed walutą („250 USD"),
+ * raz po symbolu („$180"). Zamiast zgadywać numer grupy, szukamy tej, która
+ * wygląda na walutę.
+ */
+function currencyFromMatch(match: RegExpExecArray): string {
+  const raw = match.slice(1).find((group) => group && /^(zł|pln|usd|eur|\$|€)$/i.test(group));
+  const normalized = (raw ?? '').toLowerCase();
+  if (normalized === '$' || normalized === 'usd') return 'USD';
+  if (normalized === '€' || normalized === 'eur') return 'EUR';
+  return 'PLN';
 }
 
 /** Czy nagłówek w ogóle dotyczy rekomendacji — bez tego lista zapełnia się szumem. */
@@ -203,6 +232,7 @@ export async function fetchRecommendations(instrument: InstrumentRow): Promise<n
           broker: parsed.broker,
           rating: parsed.rating,
           targetPriceE8: parsed.targetPriceE8,
+          targetCurrency: parsed.targetCurrency,
           direction: parsed.direction,
           source: 'google-news',
         })
@@ -224,6 +254,8 @@ export interface RatingEntry {
   broker: string | null;
   rating: Rating | null;
   targetPriceE8: number | null;
+  /** Waluta ceny docelowej; null dla wpisów sprzed rozróżnienia walut. */
+  targetCurrency: string | null;
   direction: 'up' | 'down' | null;
   title: string;
   url: string;
@@ -240,15 +272,37 @@ export interface RatingConsensus {
   downgrades: number;
   /** Mediana ceny docelowej — odporniejsza na pojedynczą skrajną wycenę niż średnia. */
   medianTargetE8: number | null;
+  /** Waluta mediany — ta sama, co waluta notowania instrumentu. */
+  targetCurrency: string | null;
   /** Potencjał wobec bieżącej ceny, w punktach bazowych. */
   upsideBp: number | null;
   monthsCovered: number;
+  /**
+   * Konsensus prosto od dostawcy notowań. Dostępny tylko wtedy, gdy funkcja
+   * jest włączona i mechanizm zadziałał — inaczej zostaje sam odczyt
+   * z nagłówków prasowych.
+   */
+  provider?: {
+    targetMeanE8: number | null;
+    targetHighE8: number | null;
+    targetLowE8: number | null;
+    analystCount: number | null;
+    recommendationKey: string | null;
+    currency: string | null;
+    distribution: { strongBuy: number; buy: number; hold: number; sell: number; strongSell: number } | null;
+    upsideBp: number | null;
+  };
 }
 
 /** Okno, z którego bierzemy rekomendacje. Starsze zdążyły się zdezaktualizować. */
 const CONSENSUS_MONTHS = 12;
 
-export function ratingConsensus(instrumentId: number, currentPriceE8: number | null): RatingConsensus {
+export function ratingConsensus(
+  instrumentId: number,
+  currentPriceE8: number | null,
+  /** Waluta notowania — ceny docelowe w innej walucie nie wchodzą do mediany. */
+  priceCurrency = 'PLN',
+): RatingConsensus {
   const from = addDays(today(config.timezone), -CONSENSUS_MONTHS * 30);
 
   const rows = db
@@ -263,6 +317,7 @@ export function ratingConsensus(instrumentId: number, currentPriceE8: number | n
     broker: row.broker,
     rating: row.rating as Rating | null,
     targetPriceE8: row.targetPriceE8,
+    targetCurrency: row.targetCurrency,
     direction: row.direction as 'up' | 'down' | null,
     title: row.title,
     url: row.url,
@@ -276,7 +331,17 @@ export function ratingConsensus(instrumentId: number, currentPriceE8: number | n
     scores.push(RATING_SCORE[entry.rating]);
   }
 
+  /*
+   * Do mediany wchodzą wyłącznie wyceny w walucie notowania. Wcześniej regex
+   * czytał tylko kwoty w złotych, więc problem nie istniał; po dopuszczeniu
+   * dolarów i euro mieszanie ich dałoby medianę bez sensu — a na jej podstawie
+   * liczy się „potencjał" wobec ceny bieżącej.
+   *
+   * Starsze wpisy nie mają zapisanej waluty; skoro powstały pod regexem
+   * wymagającym „zł", traktujemy je jako złotowe.
+   */
   const targets = entries
+    .filter((entry) => (entry.targetCurrency ?? 'PLN') === priceCurrency)
     .map((entry) => entry.targetPriceE8)
     .filter((value): value is number => value !== null)
     .sort((a, b) => a - b);
@@ -295,6 +360,7 @@ export function ratingConsensus(instrumentId: number, currentPriceE8: number | n
     downgrades: entries.filter((entry) => entry.direction === 'down').length,
     scoreAvg: scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null,
     medianTargetE8: median,
+    targetCurrency: median === null ? null : priceCurrency,
     upsideBp:
       median !== null && currentPriceE8 !== null && currentPriceE8 > 0
         ? Math.round((median / currentPriceE8 - 1) * 10_000)
@@ -309,7 +375,13 @@ export async function refreshAllRecommendations(): Promise<string> {
     .select()
     .from(instruments)
     .all()
-    .filter((row) => row.assetClass === 'stock' || row.assetClass === 'etf');
+    // Porównanie po grupie: po rozbiciu klas żaden instrument nie ma już
+    // wartości 'stock' ani 'etf', a dosłowne porównanie cicho wyzerowałoby
+    // listę spółek do odświeżenia.
+    .filter((row) => {
+      const group = rollUp(row.assetClass as AssetClass);
+      return group === 'stock' || group === 'etf';
+    });
 
   let total = 0;
   for (const row of rows) {

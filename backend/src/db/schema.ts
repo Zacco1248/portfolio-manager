@@ -44,6 +44,39 @@ export const portfolios = sqliteTable(
 );
 
 // ─────────────────────────────────────────────────────────────
+// Konta
+// ─────────────────────────────────────────────────────────────
+/**
+ * Konto to fizyczne miejsce, w którym leżą aktywa: rachunek maklerski, bank,
+ * giełda krypto, sejf.
+ *
+ * Jest wymiarem NIEZALEŻNYM od portfela. Portfel niesie reżim podatkowy
+ * (IKE/IKZE) i jest jednostką rozliczeniową; konto odpowiada na pytanie „gdzie
+ * to fizycznie jest". Dzięki rozdzieleniu obu osi IKE w XTB i zwykły rachunek
+ * w XTB to dwa portfele, ale jedno konto.
+ *
+ * Ta sama para portfel+instrument może mieć transakcje z dwóch kont, dlatego
+ * konto NIE wchodzi do klucza FIFO — jest wyłącznie wymiarem raportowym.
+ */
+export const accounts = sqliteTable(
+  'accounts',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    /** broker | bank | exchange | vault | other — steruje tylko ikoną i grupowaniem w UI. */
+    kind: text('kind').notNull().default('broker'),
+    /** Nazwa instytucji, gdy różni się od potocznej nazwy konta („XTB" vs „X-Trade Brokers DM SA"). */
+    institution: text('institution'),
+    currency: text('currency').notNull().default('PLN'),
+    note: text('note'),
+    archived: integer('archived', { mode: 'boolean' }).notNull().default(false),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [uniqueIndex('accounts_name_uq').on(t.name)],
+);
+
+// ─────────────────────────────────────────────────────────────
 // Instrumenty
 // ─────────────────────────────────────────────────────────────
 export const instruments = sqliteTable(
@@ -120,6 +153,16 @@ export const transactions = sqliteTable(
       .references(() => portfolios.id, { onDelete: 'cascade' }),
     /** null dla wpłat/wypłat gotówki niezwiązanych z instrumentem. */
     instrumentId: integer('instrument_id').references(() => instruments.id, { onDelete: 'restrict' }),
+    /**
+     * Konto, na którym operacja faktycznie się odbyła.
+     *
+     * Nullable: transakcje sprzed wprowadzenia kont oraz źródła, które konta
+     * nie podają. `set null` zamiast `restrict`, bo skasowanie konta nigdy nie
+     * może pociągnąć za sobą transakcji — to zniszczyłoby FIFO i historię
+     * podatkową. Traci się wtedy wyłącznie wymiar raportowy. Router i tak
+     * odmawia usunięcia konta, które ma transakcje.
+     */
+    accountId: integer('account_id').references(() => accounts.id, { onDelete: 'set null' }),
     /** buy | sell | dividend | interest | fee | tax | deposit | withdrawal | split */
     type: text('type').notNull(),
     tradeDate: text('trade_date').notNull(),
@@ -167,7 +210,40 @@ export const transactions = sqliteTable(
     index('transactions_instrument_idx').on(t.instrumentId, t.tradeDate),
     index('transactions_type_idx').on(t.type),
     index('transactions_dedupe_idx').on(t.dedupeKey),
+    index('transactions_account_idx').on(t.accountId, t.tradeDate),
   ],
+);
+
+/**
+ * Kosz na usunięte transakcje.
+ *
+ * Świadomie osobna tabela, a nie znacznik `deleted_at` na `transactions`:
+ * transakcje czyta kilkanaście miejsc liczących pieniądze — FIFO, saldo
+ * gotówki, XIRR, raport PIT-38, wpłaty w projekcji. Znacznik wymagałby
+ * dołożenia filtra w każdym z nich, a pominięcie choćby jednego dawałoby
+ * cichy błąd w kwotach. Przeniesienie wiersza sprawia, że nie ma czego
+ * pomijać: usunięta transakcja po prostu nie istnieje dla żadnego odczytu.
+ *
+ * `payload` trzyma pełny wiersz, żeby przywrócenie odtworzyło go dokładnie,
+ * łącznie z kursami i hashami importu.
+ */
+export const deletedTransactions = sqliteTable(
+  'deleted_transactions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    /** Identyfikator sprzed usunięcia — wyłącznie informacyjnie. */
+    transactionId: integer('transaction_id').notNull(),
+    portfolioId: integer('portfolio_id').notNull(),
+    instrumentId: integer('instrument_id'),
+    accountId: integer('account_id'),
+    /** Pola powielone z wiersza, żeby lista kosza nie wymagała parsowania JSON-a. */
+    type: text('type').notNull(),
+    tradeDate: text('trade_date').notNull(),
+    amountPlnMinor: integer('amount_pln_minor').notNull().default(0),
+    payload: text('payload', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+    deletedAt: text('deleted_at').notNull().default(now),
+  },
+  (t) => [index('deleted_transactions_deleted_idx').on(t.deletedAt)],
 );
 
 /**
@@ -308,6 +384,12 @@ export const bondHoldings = sqliteTable(
       .notNull()
       .references(() => portfolios.id, { onDelete: 'cascade' }),
     instrumentId: integer('instrument_id').references(() => instruments.id, { onDelete: 'set null' }),
+    /**
+     * Konto, na którym kupiono obligacje. Osobno od transakcji, bo obligacje
+     * detaliczne nie przechodzą przez tabelę `transactions` — bez tej kolumny
+     * wypadłyby z rozbicia portfela na konta jako „nieprzypisane".
+     */
+    accountId: integer('account_id').references(() => accounts.id, { onDelete: 'set null' }),
     /** Oznaczenie emisji, np. EDO0536. */
     series: text('series').notNull(),
     /** EDO | COI | TOS | ROR | DOR | ROS | ROD | OTS */
@@ -566,9 +648,15 @@ export const instrumentsRelations = relations(instruments, ({ many }) => ({
   news: many(newsItems),
 }));
 
+export const accountsRelations = relations(accounts, ({ many }) => ({
+  transactions: many(transactions),
+  bonds: many(bondHoldings),
+}));
+
 export const transactionsRelations = relations(transactions, ({ one }) => ({
   portfolio: one(portfolios, { fields: [transactions.portfolioId], references: [portfolios.id] }),
   instrument: one(instruments, { fields: [transactions.instrumentId], references: [instruments.id] }),
+  account: one(accounts, { fields: [transactions.accountId], references: [accounts.id] }),
 }));
 
 export const instrumentAliasesRelations = relations(instrumentAliases, ({ one }) => ({
@@ -580,8 +668,10 @@ export const newsItemsRelations = relations(newsItems, ({ one }) => ({
 }));
 
 export type PortfolioRow = typeof portfolios.$inferSelect;
+export type AccountRow = typeof accounts.$inferSelect;
 export type InstrumentRow = typeof instruments.$inferSelect;
 export type TransactionRow = typeof transactions.$inferSelect;
+export type DeletedTransactionRow = typeof deletedTransactions.$inferSelect;
 export type RealizedGainRow = typeof realizedGains.$inferSelect;
 export type PriceDailyRow = typeof pricesDaily.$inferSelect;
 export type QuoteRow = typeof quotes.$inferSelect;
@@ -651,6 +741,13 @@ export const analystRatings = sqliteTable(
     /** kupuj, akumuluj, trzymaj, neutralnie, redukuj, sprzedaj. */
     rating: text('rating'),
     targetPriceE8: integer('target_price_e8'),
+    /**
+     * Waluta ceny docelowej.
+     *
+     * Bez niej mediana wycen mieszałaby złote z dolarami, a „potencjał"
+     * liczony wobec ceny bieżącej porównywałby różne jednostki.
+     */
+    targetCurrency: text('target_currency'),
     /** Czy wycena została podwyższona czy obniżona. */
     direction: text('direction'),
     source: text('source').notNull(),

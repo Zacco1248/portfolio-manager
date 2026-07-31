@@ -17,6 +17,7 @@ vi.mock('../src/db/index.js', () => ({
 }));
 
 const { computePeriods, valueBond } = await import('../src/services/bonds.js');
+const { BOND_KINDS, BOND_TERMS, defaultBondSeries } = await import('@portfolio/shared');
 
 function setCpi(entries: Record<string, number>): void {
   cpiByPeriod.clear();
@@ -153,5 +154,119 @@ describe('obligacje o stałym oprocentowaniu', () => {
 
     expect(periods).toHaveLength(3);
     expect(periods.every((p) => p.rateBp === 700)).toBe(true);
+  });
+});
+
+/**
+ * Regres wobec arkusza użytkownika (`import/portfel_wspolny.xlsx`, arkusz
+ * „Obligacje").
+ *
+ * Arkusz liczy wartość obligacji własnymi formułami i podaje wynik w kolumnie
+ * „cena". Ten test sprawdza, że nasz silnik daje te same liczby dla tych samych
+ * warunków emisji i tych samych odczytów inflacji — czyli że wyliczenie jest
+ * konkretne, a nie prognozowane.
+ *
+ * Odczyty CPI pochodzą z ukrytego arkusza „Inflacja" (wariant „analogiczny
+ * miesiąc poprzedniego roku"), ten sam, który czyta parser importu.
+ */
+describe('EDO — zgodność z arkuszem użytkownika', () => {
+  /** Dzień wyceny, dla którego arkusz podał wartości w kolumnie „cena". */
+  const asOf = '2026-07-29';
+
+  /** Emitent bierze odczyt sprzed dwóch miesięcy względem początku okresu. */
+  const REAL_CPI = {
+    '2025-12': 240,
+    '2026-01': 210,
+    '2026-02': 210,
+    '2026-04': 320,
+  };
+
+  function edoBond(purchaseDate: string, firstYearRateBp: number, count = 1) {
+    return {
+      kind: 'EDO' as const,
+      purchaseDate,
+      count,
+      nominalMinor: 10_000,
+      firstYearRateBp,
+      marginBp: 200,
+      termMonths: 120,
+      capitalization: 'annual' as const,
+    };
+  }
+
+  it.each([
+    // seria,        zakup,        1. rok,  sztuk, wartość z arkusza (zł)
+    ['EDO-130235', '2025-02-13', 655, 1, 108.68],
+    ['EDO-100335', '2025-03-10', 655, 1, 108.24],
+    ['EDO-100435', '2025-04-10', 655, 1, 107.87],
+    ['EDO-040635', '2025-06-04', 625, 1, 107.08],
+    ['EDO-160436', '2026-04-16', 535, 2, 203.05],
+  ])('%s wycenia się jak w arkuszu', (_series, purchaseDate, rateBp, count, expectedZl) => {
+    setCpi(REAL_CPI);
+    const valuation = valueBond(edoBond(purchaseDate as string, rateBp as number, count as number), asOf);
+
+    // Arkusz zaokrągla do groszy, więc dopuszczamy różnicę jednego grosza.
+    expect(Math.abs(valuation.currentValueMinor - Math.round((expectedZl as number) * 100))).toBeLessThanOrEqual(1);
+  });
+
+  it('drugi rok naliczany jest z realnego odczytu, nie z prognozy', () => {
+    setCpi(REAL_CPI);
+    const periods = computePeriods(edoBond('2025-02-13', 655), asOf);
+
+    expect(periods).toHaveLength(2);
+    expect(periods[0]?.rateBp).toBe(655);
+    expect(periods[0]?.projected).toBe(false);
+    // CPI z grudnia 2025 (2,4%) plus marża 2% — dokładnie 4,4% z arkusza.
+    expect(periods[1]?.rateBp).toBe(440);
+    expect(periods[1]?.projected).toBe(false);
+  });
+
+  it('bez odczytu inflacji oznacza okres jako prognozę', () => {
+    // Ta sama obligacja, ale baza nie zna jeszcze odczytu za grudzień 2025.
+    setCpi({});
+    const periods = computePeriods(edoBond('2025-02-13', 655), asOf);
+
+    expect(periods[1]?.projected).toBe(true);
+    // Bez danych zostaje sama marża — gwarantowane minimum emitenta.
+    expect(periods[1]?.rateBp).toBe(200);
+  });
+});
+
+describe('warunki emisji i oznaczenie serii', () => {
+  it('COI i ROR wypłacają odsetki, a nie kapitalizują', () => {
+    // Import zakładał wcześniej kapitalizację roczną dla wszystkich rodzajów,
+    // przez co te dwie emisje wyceniały się za wysoko.
+    expect(BOND_TERMS.COI.capitalization).toBe('none');
+    expect(BOND_TERMS.ROR.capitalization).toBe('none');
+    expect(BOND_TERMS.DOR.capitalization).toBe('none');
+    expect(BOND_TERMS.EDO.capitalization).toBe('annual');
+  });
+
+  it('każdy rodzaj obligacji ma komplet warunków', () => {
+    for (const kind of BOND_KINDS) {
+      expect(BOND_TERMS[kind], `brak warunków dla ${kind}`).toBeDefined();
+      expect(BOND_TERMS[kind].termMonths).toBeGreaterThan(0);
+    }
+  });
+
+  it('wylicza serię z rodzaju i daty zakupu wg konwencji MF', () => {
+    // EDO kupione w lutym 2025 zapada w lutym 2035.
+    expect(defaultBondSeries('EDO', '2025-02-13')).toBe('EDO0235');
+    expect(defaultBondSeries('EDO', '2026-04-16')).toBe('EDO0436');
+    // COI to cztery lata.
+    expect(defaultBondSeries('COI', '2025-03-10')).toBe('COI0329');
+    // TOS trzy lata.
+    expect(defaultBondSeries('TOS', '2025-06-04')).toBe('TOS0628');
+  });
+
+  it('przekracza granicę roku bez pomyłki o miesiąc', () => {
+    // Grudzień + 120 miesięcy to nadal grudzień, dziesięć lat później.
+    expect(defaultBondSeries('EDO', '2025-12-31')).toBe('EDO1235');
+    // OTS trwa trzy miesiące: październik → styczeń następnego roku.
+    expect(defaultBondSeries('OTS', '2025-10-05')).toBe('OTS0126');
+  });
+
+  it('nie wywraca się na niepełnej dacie', () => {
+    expect(defaultBondSeries('EDO', '')).toBe('EDO');
   });
 });

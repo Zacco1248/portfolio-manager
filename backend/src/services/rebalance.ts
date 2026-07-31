@@ -1,7 +1,6 @@
-import { ASSET_CLASS_LABELS, shareBp } from '@portfolio/shared';
+import { ASSET_CLASS_CHILDREN, assetClassLabel, isAssetClassGroup, shareBp } from '@portfolio/shared';
 import type {
   AllocationDimension,
-  AssetClass,
   Position,
   RebalanceAction,
   RebalanceMode,
@@ -37,27 +36,30 @@ export interface RebalanceInput {
 }
 
 /**
- * Akcje i ETF-y rozbite na krajowe i zagraniczne.
+ * Wartość przypadająca na klucz celu.
  *
- * Dla portfela prowadzonego w złotych to rozróżnienie jest istotniejsze niż
- * sam podział na akcje i fundusze: decyduje o ekspozycji walutowej i o tym,
- * czy dywidendy wymagają rozliczania podatku u źródła. Sumują się z powrotem
- * do klasy nadrzędnej, więc cel „60% akcji" da się rozpisać na dwa składniki.
+ * Klucz może być liściem (`stock_pl`) albo grupą (`stock`) — w drugim
+ * przypadku sumujemy dzieci. Dzięki temu cel „60% akcji" i para celów
+ * „35% polskich + 25% zagranicznych" to dwa sposoby zapisania tego samego,
+ * a użytkownik wybiera poziom szczegółowości. `currentValues` zwraca wyłącznie
+ * liście, więc sumowanie nigdy nie policzy tej samej pozycji dwa razy.
  */
-export const EQUITY_SUBCLASSES: Record<string, { parent: string; label: string }> = {
-  stock_pl: { parent: 'stock', label: 'Akcje polskie' },
-  stock_foreign: { parent: 'stock', label: 'Akcje zagraniczne' },
-  etf_pl: { parent: 'etf', label: 'ETF-y polskie' },
-  etf_foreign: { parent: 'etf', label: 'ETF-y zagraniczne' },
-};
+export function valueForKey(values: Map<string, number>, key: string): number {
+  if (!isAssetClassGroup(key)) return values.get(key) ?? 0;
 
-const DOMESTIC_MARKETS = new Set(['WSE', 'GPW']);
-
-function isDomestic(position: Position): boolean {
-  if (position.instrument.exchange && DOMESTIC_MARKETS.has(position.instrument.exchange)) return true;
-  if (position.instrument.symbol.startsWith('WSE:')) return true;
-  // Instrument bez rynku, ale notowany w złotych, też traktujemy jak krajowy.
-  return position.instrument.exchange === null && position.instrument.currency === 'PLN';
+  /*
+   * Zbiór, nie suma po liście: `bond`, `metal`, `crypto` i `cash` są
+   * jednocześnie liśćmi i grupami jednoelementowymi, więc klucz własny
+   * pokrywa się tam z jedynym dzieckiem i bez odsiania duplikatu wartość
+   * policzyłaby się dwa razy.
+   *
+   * Klucz własny wchodzi do zbioru także dla `stock` i `etf` — tak zapisane
+   * są dane sprzed rozbicia klas i cele alokacji ustawione na grupie.
+   */
+  const keys = new Set<string>([key, ...ASSET_CLASS_CHILDREN[key]]);
+  let sum = 0;
+  for (const k of keys) sum += values.get(k) ?? 0;
+  return sum;
 }
 
 /** Klucz wymiaru dla pozycji — po czym grupujemy alokację. */
@@ -65,11 +67,6 @@ export function dimensionKey(position: Position, dimension: AllocationDimension)
   switch (dimension) {
     case 'asset_class':
       return position.instrument.assetClass;
-    case 'equity_split': {
-      const assetClass = position.instrument.assetClass;
-      if (assetClass !== 'stock' && assetClass !== 'etf') return assetClass;
-      return `${assetClass}_${isDomestic(position) ? 'pl' : 'foreign'}`;
-    }
     case 'instrument':
       return position.instrument.symbol;
     case 'sector':
@@ -84,10 +81,7 @@ export function dimensionKey(position: Position, dimension: AllocationDimension)
 }
 
 function labelFor(key: string, dimension: AllocationDimension): string {
-  if (dimension === 'equity_split' && EQUITY_SUBCLASSES[key]) return EQUITY_SUBCLASSES[key]!.label;
-  if (dimension === 'asset_class' || dimension === 'equity_split') {
-    return ASSET_CLASS_LABELS[key as AssetClass] ?? key;
-  }
+  if (dimension === 'asset_class') return assetClassLabel(key);
   return key === 'unknown' ? 'Nieprzypisane' : key;
 }
 
@@ -103,12 +97,7 @@ export function currentValues(
     values.set(key, (values.get(key) ?? 0) + position.valuePlnMinor);
   }
   if (cashPlnMinor !== 0) {
-    const cashKey =
-      dimension === 'asset_class' || dimension === 'equity_split'
-        ? 'cash'
-        : dimension === 'currency'
-          ? 'PLN'
-          : 'unknown';
+    const cashKey = dimension === 'asset_class' ? 'cash' : dimension === 'currency' ? 'PLN' : 'unknown';
     values.set(cashKey, (values.get(cashKey) ?? 0) + cashPlnMinor);
   }
   return values;
@@ -119,7 +108,7 @@ export function totalDriftBp(values: Map<string, number>, targets: TargetEntry[]
   if (total <= 0) return 0;
   let drift = 0;
   for (const target of targets) {
-    const current = shareBp(values.get(target.key) ?? 0, total);
+    const current = shareBp(valueForKey(values, target.key), total);
     drift += Math.abs(current - target.targetBp);
   }
   return drift;
@@ -152,7 +141,7 @@ export function buildPlan(input: RebalanceInput, mode: RebalanceMode): Rebalance
   }
 
   for (const target of targets) {
-    const current = values.get(target.key) ?? 0;
+    const current = valueForKey(values, target.key);
     const desired = Math.round((targetTotal * target.targetBp) / 10_000);
     const currentShare = shareBp(current, currentTotal);
     const driftBp = currentShare - target.targetBp;

@@ -1,10 +1,14 @@
+import { useEffect, useState } from 'react';
 import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link } from 'react-router-dom';
 import { AiDisclaimer, AiPending, Card, ErrorBanner, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatPercent, formatPln, toneClass } from '@/lib/format';
-import { useAsync } from '@/lib/useAsync';
+import { useAsync, useOnDemand } from '@/lib/useAsync';
 import { usePortfolioParam } from '@/state/app';
+
+/** Horyzonty projekcji dostępne w interfejsie. */
+const PROJECTION_HORIZONS = [3, 5, 10, 15, 20, 30] as const;
 
 const KIND_STYLE: Record<string, { icon: string; className: string }> = {
   achievement: { icon: '✓', className: 'border-gain/40 bg-gain/5' },
@@ -23,10 +27,17 @@ const KIND_STYLE: Record<string, { icon: string; className: string }> = {
  */
 export function Insights() {
   const portfolioId = usePortfolioParam();
-  const { data, error, loading, reload } = useAsync(() => api.insights.get(portfolioId), [portfolioId]);
+  const [years, setYears] = useState(5);
+  const { data, error, loading, reload } = useAsync(
+    () => api.insights.get(portfolioId, years),
+    [portfolioId, years],
+  );
 
   // Komentarz modelu leci osobno i nie wstrzymuje liczb — patrz AiPending.
-  const narrative = useAsync(() => api.insights.narrative(portfolioId), [portfolioId]);
+  // Komentarz modelu na żądanie — kosztuje wywołanie, a liczby niżej powstają
+  // lokalnie i pojawiają się natychmiast.
+  const narrative = useOnDemand(() => api.insights.narrative(portfolioId));
+  useEffect(() => narrative.reset(), [portfolioId, narrative.reset]);
 
   if (loading) return <Spinner />;
   if (error) return <ErrorBanner message={error} onRetry={reload} />;
@@ -44,22 +55,41 @@ export function Insights() {
 
   return (
     <div className="space-y-4">
-      {(narrative.loading || narrative.data?.narrative) && (
-        <Card title="Komentarz">
-          {narrative.loading ? (
-            <AiPending />
-          ) : (
-            <>
-              <p className="whitespace-pre-line px-4 pb-3 pt-2 text-sm text-content-secondary">
-                {narrative.data?.narrative}
-              </p>
-              <div className="px-4 pb-4">
-                <AiDisclaimer text="Komentarz wygenerowany automatycznie. Nie stanowi rekomendacji ani doradztwa inwestycyjnego." />
-              </div>
-            </>
-          )}
-        </Card>
-      )}
+      <Card
+        title="Komentarz"
+        action={
+          <button type="button" className="btn text-2xs" disabled={narrative.loading} onClick={narrative.run}>
+            {narrative.loading ? 'Piszę…' : narrative.started ? 'Odśwież' : 'Poproś o komentarz'}
+          </button>
+        }
+      >
+        {!narrative.started && (
+          <p className="px-4 pb-4 pt-2 text-2xs text-content-muted">
+            Model opisze, co najmocniej zaważyło na wyniku i gdzie widać miejsce na poprawę. Liczby poniżej
+            powstają lokalnie i nie zależą od AI.
+          </p>
+        )}
+
+        {narrative.loading && <AiPending />}
+        {narrative.error && <ErrorBanner message={narrative.error} onRetry={narrative.run} />}
+
+        {narrative.data?.narrative && (
+          <>
+            <p className="whitespace-pre-line px-4 pb-3 pt-2 text-sm text-content-secondary">
+              {narrative.data.narrative}
+            </p>
+            <div className="px-4 pb-4">
+              <AiDisclaimer text="Komentarz wygenerowany automatycznie. Nie stanowi rekomendacji ani doradztwa inwestycyjnego." />
+            </div>
+          </>
+        )}
+
+        {narrative.started && !narrative.loading && !narrative.error && !narrative.data?.narrative && (
+          <p className="px-4 pb-4 pt-2 text-2xs text-content-muted">
+            Komentarz jest niedostępny — funkcja „Komentarz do podsumowania" bywa wyłączona w Ustawieniach.
+          </p>
+        )}
+      </Card>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {insights.map((insight, index) => {
@@ -81,7 +111,27 @@ export function Insights() {
         })}
       </div>
 
-      <Card title="Gdzie będziesz za 5 lat przy tym tempie">
+      <Card
+        title={`Gdzie będziesz za ${years} ${years === 1 ? 'rok' : years < 5 ? 'lata' : 'lat'} przy tym tempie`}
+        action={
+          <div className="flex gap-1">
+            {PROJECTION_HORIZONS.map((horizon) => (
+              <button
+                key={horizon}
+                type="button"
+                className={`rounded px-2 py-0.5 text-2xs transition-colors ${
+                  horizon === years
+                    ? 'bg-accent/15 font-medium text-accent'
+                    : 'text-content-muted hover:text-content-primary'
+                }`}
+                onClick={() => setYears(horizon)}
+              >
+                {horizon} l.
+              </button>
+            ))}
+          </div>
+        }
+      >
         <div className="grid gap-3 p-4 pt-2 sm:grid-cols-4">
           <Stat label="Miesięczna wpłata" value={formatPln(projection.monthlyContributionPlnMinor)} />
           <Stat
@@ -89,7 +139,7 @@ export function Insights() {
             value={formatPercent(projection.assumedAnnualReturnBp)}
             hint={projection.returnSource === 'xirr' ? 'z Twojego XIRR' : 'wartość domyślna'}
           />
-          <Stat label="Wartość za 5 lat" value={last ? formatPln(last.valuePlnMinor) : '—'} highlight />
+          <Stat label={`Wartość za ${years} lat`} value={last ? formatPln(last.valuePlnMinor) : '—'} highlight />
           <Stat label="W tym z procentu składanego" value={formatPln(growth)} />
         </div>
 

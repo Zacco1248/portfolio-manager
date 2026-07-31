@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { applyBp, bigintToNumber, mulDiv, parseDecimal } from '@portfolio/shared';
 import type { BondHolding, BondKind, BondPeriod } from '@portfolio/shared';
-import { INFLATION_INDEXED_BONDS } from '@portfolio/shared';
+import { INFLATION_INDEXED_BONDS, bondTermsFor } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { bondHoldings, cpiRates, instruments, transactions } from '../db/schema.js';
@@ -209,8 +209,8 @@ function importedBonds(portfolioId?: number): BondHolding[] {
       nominalMinor: 10_000,
       firstYearRateBp: Math.round(rate * 100),
       marginBp: Math.round(Number(meta.marginPercent ?? 0) * 100),
-      termMonths: TERM_MONTHS[kind] ?? 120,
-      capitalization: 'annual',
+      termMonths: bondTermsFor(kind).termMonths,
+      capitalization: bondTermsFor(kind).capitalization,
     };
     const valuation = valueBond(params);
 
@@ -226,7 +226,7 @@ function importedBonds(portfolioId?: number): BondHolding[] {
       marginBp: params.marginBp,
       termMonths: params.termMonths,
       maturityDate: addMonths(purchaseDate, params.termMonths),
-      capitalization: 'annual',
+      capitalization: params.capitalization,
       currentValueMinor: valuation.currentValueMinor,
       accruedInterestMinor: valuation.accruedInterestMinor,
       currentPeriodRateBp: valuation.currentPeriodRateBp,
@@ -236,18 +236,6 @@ function importedBonds(portfolioId?: number): BondHolding[] {
 
   return out;
 }
-
-/** Miesiące trwania emisji wg rodzaju obligacji detalicznej. */
-const TERM_MONTHS: Record<string, number> = {
-  EDO: 120,
-  COI: 48,
-  TOS: 36,
-  ROR: 12,
-  DOR: 24,
-  ROS: 72,
-  ROD: 144,
-  OTS: 3,
-};
 
 export function listBonds(portfolioId?: number): BondHolding[] {
   const rows = db.select().from(bondHoldings).all();

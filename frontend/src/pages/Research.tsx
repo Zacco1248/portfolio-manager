@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { RatingsCard } from '@/components/RatingsCard';
-import { AiDisclaimer, AiPending, Card, ErrorBanner, Field, Spinner } from '@/components/ui';
+import { AiDisclaimer, AiPending, Card, ErrorBanner, Field, InfoHint, Spinner } from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
 import type { ResearchSnapshot } from '@/lib/api';
 import { formatCost, formatDate, formatPercent, formatPln, toneClass } from '@/lib/format';
@@ -22,6 +22,36 @@ export function Research() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
+  const [adding, setAdding] = useState<string | null>(null);
+
+  /**
+   * Zakłada instrument z podpowiedzi dostawcy i otwiera jego kartę.
+   *
+   * Waluta i giełda idą z wyniku wyszukiwania, a nie z wartości domyślnych:
+   * `NOW` bez tych danych zostałby znormalizowany do `NOW.WA`, czyli
+   * nieistniejącego papieru na GPW zamiast ServiceNow z NYSE.
+   */
+  const addAndShow = async (item: { symbol: string; name: string; assetClass: string; exchange: string | null; currency?: string | null }) => {
+    setAdding(item.symbol);
+    setError(null);
+    try {
+      const created = await api.instruments.create({
+        symbol: item.symbol,
+        name: item.name,
+        assetClass: item.assetClass,
+        currency: item.currency ?? 'USD',
+        ...(item.exchange ? { exchange: item.exchange } : {}),
+      });
+      setResults((current) =>
+        current?.map((row) => (row.symbol === item.symbol && row.id === null ? { ...row, id: created.id, known: true } : row)) ?? null,
+      );
+      setSelected(created.id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Nie udało się dodać instrumentu');
+    } finally {
+      setAdding(null);
+    }
+  };
 
   const search = async () => {
     setSearching(true);
@@ -85,7 +115,19 @@ export function Research() {
                   </div>
                 </div>
                 {item.id === null ? (
-                  <span className="text-2xs text-content-muted">spoza bazy — dodaj jako instrument</span>
+                  /*
+                   * Wynik spoza bazy był wcześniej martwym napisem — ślepy
+                   * zaułek, bo karta spółki wymaga instrumentu z bazy.
+                   * Teraz zakładamy go tu i od razu przechodzimy do analizy.
+                   */
+                  <button
+                    type="button"
+                    className="btn text-2xs"
+                    disabled={adding === item.symbol}
+                    onClick={() => void addAndShow(item)}
+                  >
+                    {adding === item.symbol ? 'Dodaję…' : 'Dodaj i pokaż'}
+                  </button>
                 ) : (
                   <button
                     type="button"
@@ -169,33 +211,54 @@ function ResearchCard({ instrumentId, portfolioId }: { instrumentId: number; por
         </div>
       </Card>
 
-      <Card title="Analiza techniczna">
+      <Card
+        title="Analiza techniczna"
+        action={
+          technical.asOf ? (
+            <span className="text-2xs text-content-muted">
+              z notowań {formatDate(technical.asOf)}
+            </span>
+          ) : null
+        }
+      >
+        {/* Data przy nagłówku, bo wskaźnik sprzed roku wygląda identycznie
+            jak dzisiejszy — bez niej nie da się ich odróżnić. */}
         <div className="grid grid-cols-2 gap-2 p-4 pt-2 sm:grid-cols-4">
           <Tile
             label="RSI (14)"
             value={technical.rsi === null ? '—' : technical.rsi.toFixed(1)}
             hint={zoneLabel(technical.rsiZone)}
+            info="Wskaźnik siły względnej z 14 sesji. Porównuje wielkość ostatnich wzrostów do spadków w skali 0–100. Powyżej 70 mówi się o wykupieniu, poniżej 30 o wyprzedaniu — ale w silnym trendzie skrajne wartości potrafią utrzymywać się tygodniami."
           />
-          <Tile label="Układ średnich" value={trendLabel(technical.trend)} hint="SMA 50 wobec SMA 200" />
+          <Tile
+            label="Układ średnich"
+            value={trendLabel(technical.trend)}
+            hint="SMA 50 wobec SMA 200"
+            info="Położenie średniej z 50 sesji względem średniej z 200. Gdy krótsza jest nad dłuższą, kurs rośnie szybciej niż jego długoterminowa średnia. To wskaźnik opóźniony — potwierdza trend, który już trwa, zamiast go zapowiadać."
+          />
           <Tile
             label="Wstęgi Bollingera"
             value={technical.bollingerPercent === null ? '—' : `${technical.bollingerPercent.toFixed(0)}%`}
             hint="0% = dolna wstęga, 100% = górna"
+            info="Wstęgi to średnia z 20 sesji plus/minus dwa odchylenia standardowe. Wartość mówi, gdzie w tym paśmie jest kurs. Sens jest względny: ten sam ruch o 3% jest wyjściem poza wstęgę dla spokojnej spółki i normą dla zmiennej."
           />
           <Tile
             label="Zmienność (ATR)"
             value={technical.atrPercent === null ? '—' : `${technical.atrPercent.toFixed(2)}%`}
             hint="Średni zakres dzienny"
+            info="Średni rzeczywisty zakres z 14 sesji, podany jako procent ceny. Mówi, o ile kurs typowo rusza się w ciągu dnia. Nie wskazuje kierunku — służy do oceny, czy dany ruch jest duży jak na ten konkretny walor."
           />
           <Tile
             label="Stochastyczny %K"
             value={technical.stochasticK === null ? '—' : technical.stochasticK.toFixed(0)}
             hint={zoneLabel(technical.stochasticZone)}
+            info="Pozycja zamknięcia względem zakresu z 14 sesji, w skali 0–100. Sto oznacza zamknięcie na szczycie tego zakresu, zero na dnie. Reaguje szybciej od RSI, więc częściej daje fałszywe sygnały."
           />
           <Tile
             label="Momentum (20 sesji)"
             value={technical.momentum20 === null ? '—' : `${technical.momentum20 > 0 ? '+' : ''}${technical.momentum20.toFixed(1)}%`}
             tone={technical.momentum20 === null ? undefined : toneClass(technical.momentum20)}
+            info="Zmiana kursu przez ostatnie 20 sesji, czyli mniej więcej miesiąc handlu. Zwykła stopa zwrotu z okresu — pokazuje tempo, nie przewiduje jego utrzymania."
           />
           <Tile
             label="Od rocznego maksimum"
@@ -291,10 +354,26 @@ function ResearchCard({ instrumentId, portfolioId }: { instrumentId: number; por
   );
 }
 
-function Tile({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: string }) {
+function Tile({
+  label,
+  value,
+  hint,
+  tone,
+  info,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: string;
+  /** Wyjaśnienie wskaźnika, pokazywane pod ikoną „i". */
+  info?: string;
+}) {
   return (
     <div className="rounded-lg border border-surface-border bg-surface-overlay/40 px-3 py-2">
-      <div className="text-2xs uppercase tracking-wide text-content-muted">{label}</div>
+      <div className="flex items-center text-2xs uppercase tracking-wide text-content-muted">
+        {label}
+        {info && <InfoHint text={info} />}
+      </div>
       <div className={`mt-0.5 text-sm font-semibold tabular ${tone ?? ''}`}>{value}</div>
       {hint && <div className="mt-0.5 text-2xs text-content-muted">{hint}</div>}
     </div>

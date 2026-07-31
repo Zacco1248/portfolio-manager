@@ -80,13 +80,13 @@ beforeAll(async () => {
 
   cdrId = db
     .insert(schema.instruments)
-    .values({ symbol: 'WSE:CDR', name: 'CD Projekt', assetClass: 'stock', currency: 'PLN', exchange: 'WSE' })
+    .values({ symbol: 'WSE:CDR', name: 'CD Projekt', assetClass: 'stock_pl', currency: 'PLN', exchange: 'WSE' })
     .returning()
     .get().id;
 
   iuitId = db
     .insert(schema.instruments)
-    .values({ symbol: 'LON:IUIT', name: 'iShares S&P 500 IT', assetClass: 'etf', currency: 'USD', exchange: 'LON' })
+    .values({ symbol: 'LON:IUIT', name: 'iShares S&P 500 IT', assetClass: 'etf_foreign', currency: 'USD', exchange: 'LON' })
     .returning()
     .get().id;
 
@@ -294,7 +294,7 @@ describe('pulpit', () => {
     const dashboard = m.dashboard.buildDashboard([mainPortfolio]);
     const keys = dashboard.allocation.assetClass.map((slice) => slice.key);
 
-    expect(keys).toContain('stock');
+    expect(keys).toContain('stock_pl');
     expect(keys).toContain('cash');
     const total = dashboard.allocation.assetClass.reduce((sum, s) => sum + s.valuePlnMinor, 0);
     expect(total).toBe(1_050_000);
@@ -315,7 +315,7 @@ describe('alerty', () => {
     // Instrument z watchlisty: nie mamy pozycji, ale mamy notowanie.
     const watched = db
       .insert(schema.instruments)
-      .values({ symbol: 'WSE:PKO', name: 'PKO BP', assetClass: 'stock', currency: 'PLN', exchange: 'WSE' })
+      .values({ symbol: 'WSE:PKO', name: 'PKO BP', assetClass: 'stock_pl', currency: 'PLN', exchange: 'WSE' })
       .returning()
       .get();
 
@@ -370,5 +370,68 @@ describe('przeliczanie zysków zrealizowanych', () => {
     expect(cdr.qtyE8).toBe(toQty('6'));
     // Sprzedano 4 szt. kupione po 200 zł za 260 zł → 240 zł zysku.
     expect(m.positions.realizedTotal([mainPortfolio])).toBe(24_000);
+  });
+});
+
+/**
+ * Kosz na transakcje.
+ *
+ * Usunięcie przenosi wiersz do osobnej tabeli, zamiast oznaczać go flagą —
+ * dzięki temu żaden odczyt liczący pieniądze nie musi pamiętać o filtrze.
+ * Te testy pilnują, że przeniesienie i powrót nie gubią nic po drodze.
+ */
+describe('kosz na transakcje', () => {
+  it('usunięcie zdejmuje transakcję z wyliczeń i przenosi ją do kosza', async () => {
+    const { transaction } = await m.transactions.createTransaction({
+      portfolioId: mainPortfolio,
+      instrumentId: cdrId,
+      type: 'sell',
+      tradeDate: '2025-04-01',
+      quantity: '2',
+      price: '300',
+      currency: 'PLN',
+    });
+
+    const realizedBefore = m.positions.realizedTotal([mainPortfolio]);
+    const qtyBefore = m.positions.buildPositions([mainPortfolio]).positions.find((p) => p.instrument.id === cdrId)!.qtyE8;
+
+    m.transactions.deleteTransaction(transaction.id);
+
+    // Sprzedaż zniknęła: sztuki wróciły do pozycji, a jej zysk z rozliczenia.
+    const after = m.transactions.listTransactions({ limit: 500, offset: 0 });
+    expect(after.some((t) => t.id === transaction.id)).toBe(false);
+    expect(m.positions.realizedTotal([mainPortfolio])).toBeLessThan(realizedBefore);
+    expect(
+      m.positions.buildPositions([mainPortfolio]).positions.find((p) => p.instrument.id === cdrId)!.qtyE8,
+    ).toBeGreaterThan(qtyBefore);
+
+    const trash = m.transactions.listDeletedTransactions();
+    expect(trash.some((entry) => entry.transactionId === transaction.id)).toBe(true);
+  });
+
+  it('przywrócenie odtwarza wynik zrealizowany co do grosza', async () => {
+    const { transaction } = await m.transactions.createTransaction({
+      portfolioId: mainPortfolio,
+      instrumentId: cdrId,
+      type: 'sell',
+      tradeDate: '2025-05-01',
+      quantity: '1',
+      price: '280',
+      currency: 'PLN',
+    });
+
+    const realizedBefore = m.positions.realizedTotal([mainPortfolio]);
+
+    m.transactions.deleteTransaction(transaction.id);
+    const entry = m.transactions.listDeletedTransactions().find((e) => e.transactionId === transaction.id)!;
+    const restored = m.transactions.restoreTransaction(entry.id);
+
+    // Nowy identyfikator, ta sama treść i ten sam wynik podatkowy.
+    expect(restored.transaction.id).not.toBe(0);
+    expect(restored.transaction.tradeDate).toBe('2025-05-01');
+    expect(m.positions.realizedTotal([mainPortfolio])).toBe(realizedBefore);
+
+    // Wpis znika z kosza — nie da się przywrócić tej samej transakcji dwa razy.
+    expect(m.transactions.listDeletedTransactions().some((e) => e.id === entry.id)).toBe(false);
   });
 });

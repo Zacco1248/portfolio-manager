@@ -1,0 +1,1 @@
+ALTER TABLE `analyst_ratings` ADD `target_currency` text;

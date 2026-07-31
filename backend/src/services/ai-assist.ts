@@ -3,7 +3,7 @@ import { shareBp } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { aiAnalyses, instruments, newsItems, pricesDaily, realizedGains, transactions } from '../db/schema.js';
-import { addDays, today } from '../lib/dates.js';
+import { addDays, nowIso, today } from '../lib/dates.js';
 import {
   headlineImportance,
   looksPolicyRelated,
@@ -277,14 +277,24 @@ const MONTHLY_PROMPT = `Jesteś asystentem inwestora indywidualnego z Polski bud
 Dostajesz zamknięte podsumowanie jednego miesiąca: zmianę wartości oczyszczoną z wpłat, kwotę dopłat,
 liczbę transakcji, dywidendy, wynik zrealizowany i największe ruchy cen posiadanych pozycji.
 
-Napisz zwięzły komentarz po polsku (4-7 zdań):
-- co się w tym miesiącu wydarzyło i co za tym stoi,
-- co wynika z tego dla kogoś, kto dokłada regularnie,
-- na co warto zwrócić uwagę w kolejnym miesiącu.
+Napisz zwięzły komentarz po polsku (4-5 zdań): co się w tym miesiącu wydarzyło i które pozycje
+za to odpowiadają.
 
-Zasady: nie prognozuj cen, nie sugeruj konkretnych transakcji, nie oceniaj decyzji jako błędnych.
-Jeden zły miesiąc w portfelu długoterminowym to normalna zmienność i tak go opisuj.
-Pisz konkretnie, odwołując się do podanych liczb. Bez nagłówków i bez list punktowanych.`;
+Zasady:
+- Nie prognozuj cen i nie sugeruj konkretnych transakcji.
+- Jeden słaby miesiąc w portfelu długoterminowym to normalna zmienność — tak go opisuj, bez dramatyzowania.
+- Odwołuj się do podanych liczb wprost.
+
+Styl odpowiedzi — to jest równie ważne, co treść:
+- Pisz o tym, co WIDZISZ w danych, nie o tym, czego w nich nie ma. Nie wyliczaj czynników,
+  których nie znasz (horyzont, tolerancja ryzyka, koszty transakcyjne, sytuacja podatkowa,
+  płynność) — użytkownik wie o nich lepiej niż Ty i takie wyliczanki nic mu nie dają.
+- Żadnych zdań w rodzaju „warto sprawdzić", „należy rozważyć", „dobrze zweryfikować".
+  Jeśli coś w danych wygląda niepokojąco, powiedz co i podaj liczbę.
+- Każde zdanie ma nieść konkret: nazwę pozycji, liczbę, kierunek zmiany. Zdanie bez konkretu
+  wytnij zamiast je pisać.
+- Nie zaczynaj od podsumowania pytania ani od „na podstawie podanych danych".
+- Bez nagłówków, bez list punktowanych, bez formatowania.`;
 
 export async function monthlySummary(portfolioId: number | undefined, month?: string): Promise<AssistResult<MonthlyFacts>> {
   const facts = monthlyFacts(activePortfolioIds(portfolioId), month ?? previousMonth());
@@ -303,6 +313,247 @@ export async function monthlySummary(portfolioId: number | undefined, month?: st
 
   const result = await withModel('monthlySummary', facts, MONTHLY_PROMPT, payload);
   if (result.text) saveAnalysis('monthly_summary', result, { portfolioId, facts });
+  return result;
+}
+
+// ── Szybkie pytanie ──────────────────────────────────────────
+
+export interface QuickQuestionFacts {
+  question: string;
+  positionsCount: number;
+  /** Skrót portfela: tyle, ile trzeba, żeby odpowiedzieć o strukturze. */
+  positions: {
+    symbol: string;
+    name: string;
+    assetClass: string;
+    sector: string | null;
+    country: string | null;
+    sharePortfolioBp: number;
+    unrealizedBp: number | null;
+  }[];
+  byAssetClass: { key: string; shareBp: number }[];
+  bySector: { key: string; shareBp: number }[];
+  cashShareBp: number;
+}
+
+/** Ile pozycji trafia do kontekstu — reszta to ogon bez wpływu na odpowiedź. */
+const QUESTION_POSITIONS = 25;
+
+/**
+ * Kontekst dla swobodnego pytania o portfel.
+ *
+ * Świadomie bez kwot: do odpowiedzi na pytania w rodzaju „czy zamiana X na Y
+ * ma sens" wystarczą udziały i struktura, a kwoty byłyby najwrażliwszą częścią
+ * danych wysyłanych na zewnątrz.
+ */
+export function quickQuestionFacts(portfolioIds: number[], question: string): QuickQuestionFacts {
+  const { positions, cashByPortfolio } = buildPositions(portfolioIds);
+  const cash = [...cashByPortfolio.values()].reduce((sum, v) => sum + v, 0);
+  const total = positions.reduce((sum, p) => sum + p.valuePlnMinor, 0) + cash;
+
+  const groupShares = (pick: (p: (typeof positions)[number]) => string | null): { key: string; shareBp: number }[] => {
+    const sums = new Map<string, number>();
+    for (const position of positions) {
+      const key = pick(position) ?? 'nieprzypisane';
+      sums.set(key, (sums.get(key) ?? 0) + position.valuePlnMinor);
+    }
+    return [...sums.entries()]
+      .map(([key, value]) => ({ key, shareBp: Math.round(shareBp(value, total)) }))
+      .sort((a, b) => b.shareBp - a.shareBp);
+  };
+
+  return {
+    question,
+    positionsCount: positions.length,
+    positions: positions.slice(0, QUESTION_POSITIONS).map((position) => ({
+      symbol: position.instrument.symbol,
+      name: position.instrument.name,
+      assetClass: position.instrument.assetClass,
+      sector: position.instrument.sector,
+      country: position.instrument.country,
+      sharePortfolioBp: position.sharePortfolioBp,
+      unrealizedBp: position.unrealizedBp,
+    })),
+    byAssetClass: groupShares((p) => p.instrument.assetClass),
+    bySector: groupShares((p) => p.instrument.sector),
+    cashShareBp: Math.round(shareBp(cash, total)),
+  };
+}
+
+const QUESTION_PROMPT = `Jesteś asystentem inwestora indywidualnego. Dostajesz jego pytanie oraz strukturę
+portfela: pozycje z udziałami i wynikami procentowymi, rozbicie na klasy aktywów i sektory, udział gotówki.
+
+Odpowiedz po polsku, zwięźle — od trzech do pięciu zdań.
+
+Zasady:
+- Nie wydawaj polecenia „kup" ani „sprzedaj". Zamiast tego pokaż, co konkretnie zmieni się w strukturze
+  portfela: które udziały wzrosną, które spadną, o ile.
+- Opieraj się wyłącznie na podanych danych i nie prognozuj cen.
+- Gdy pytanie dotyczy pozycji spoza listy, powiedz to jednym zdaniem i przejdź dalej.
+
+Styl odpowiedzi — to jest równie ważne, co treść:
+- Pisz o tym, co WIDZISZ w danych, nie o tym, czego w nich nie ma. Nie wyliczaj czynników,
+  których nie znasz (horyzont, tolerancja ryzyka, koszty transakcyjne, sytuacja podatkowa,
+  płynność) — użytkownik wie o nich lepiej niż Ty i takie wyliczanki nic mu nie dają.
+- Żadnych zdań w rodzaju „warto sprawdzić", „należy rozważyć", „dobrze zweryfikować".
+  Jeśli coś w danych wygląda niepokojąco, powiedz co i podaj liczbę.
+- Każde zdanie ma nieść konkret: nazwę pozycji, liczbę, kierunek zmiany. Zdanie bez konkretu
+  wytnij zamiast je pisać.
+- Nie zaczynaj od podsumowania pytania ani od „na podstawie podanych danych".
+- Bez nagłówków, bez list punktowanych, bez formatowania.`;
+
+export async function quickQuestion(
+  question: string,
+  portfolioId?: number,
+): Promise<AssistResult<QuickQuestionFacts>> {
+  const facts = quickQuestionFacts(activePortfolioIds(portfolioId), question);
+
+  const payload = [
+    `Pytanie: ${facts.question}`,
+    '',
+    `Pozycji w portfelu: ${facts.positionsCount}, gotówka: ${pct(facts.cashShareBp)}`,
+    `Klasy aktywów: ${facts.byAssetClass.map((g) => `${g.key} ${pct(g.shareBp)}`).join(', ')}`,
+    `Sektory: ${facts.bySector.slice(0, 8).map((g) => `${g.key} ${pct(g.shareBp)}`).join(', ')}`,
+    '',
+    'Pozycje:',
+    ...facts.positions.map(
+      (position) =>
+        `- ${position.symbol} (${position.name}): udział ${pct(position.sharePortfolioBp)}, ` +
+        `wynik ${position.unrealizedBp === null ? 'brak danych' : pct(position.unrealizedBp)}, ` +
+        `${position.assetClass}, sektor ${position.sector ?? 'nieprzypisany'}, region ${position.country ?? 'nieprzypisany'}`,
+    ),
+  ].join('\n');
+
+  const result = await withModel('quickQuestion', facts, QUESTION_PROMPT, payload);
+  if (result.text) saveAnalysis('quick_question', result, { portfolioId, facts });
+  return result;
+}
+
+// ── Podsumowanie sesji ───────────────────────────────────────
+
+export interface SessionMover {
+  symbol: string;
+  name: string;
+  changeBp: number;
+  sharePortfolioBp: number;
+  /** Tytuły z ostatniej doby, które udało się przypisać do tej spółki. */
+  headlines: string[];
+}
+
+export interface SessionFacts {
+  /** Kiedy liczone — zmiany dzienne pochodzą z ostatniego notowania. */
+  asOf: string;
+  positionsCount: number;
+  /** Ile spółek zyskało, a ile straciło. */
+  gainers: number;
+  losers: number;
+  /** Ważona udziałem zmiana całego portfela. */
+  portfolioChangeBp: number | null;
+  movers: SessionMover[];
+  staleCount: number;
+}
+
+/** Ile spółek trafia do podsumowania — dalej zaczyna się szum. */
+const SESSION_MOVERS = 6;
+
+/**
+ * Co się działo na spółkach z portfela w ostatniej dobie.
+ *
+ * Wszystkie liczby powstają tutaj; model dostaje je gotowe i tylko opisuje.
+ * To ta sama zasada, co przy pozostałych funkcjach — model nie liczy pieniędzy.
+ */
+export function sessionFacts(portfolioIds: number[]): SessionFacts {
+  const { positions } = buildPositions(portfolioIds);
+  const withChange = positions.filter((p) => p.dayChangeBp !== null);
+
+  const totalValue = positions.reduce((sum, p) => sum + p.valuePlnMinor, 0);
+  const weightedChange = withChange.reduce((sum, p) => sum + (p.dayChangeBp ?? 0) * p.valuePlnMinor, 0);
+
+  const since = new Date(Date.now() - 24 * 3_600_000).toISOString();
+  const recentNews = db
+    .select()
+    .from(newsItems)
+    .where(gte(newsItems.publishedAt, since))
+    .orderBy(desc(newsItems.publishedAt))
+    .limit(200)
+    .all();
+
+  const movers = [...withChange]
+    .sort((a, b) => Math.abs(b.dayChangeBp ?? 0) - Math.abs(a.dayChangeBp ?? 0))
+    .slice(0, SESSION_MOVERS)
+    .map((position) => ({
+      symbol: position.instrument.symbol,
+      name: position.instrument.name,
+      changeBp: position.dayChangeBp ?? 0,
+      sharePortfolioBp: position.sharePortfolioBp,
+      /*
+       * Wiadomość jest w bazie unikalna po adresie, więc tekst dotyczący kilku
+       * spółek przypina się tylko do pierwszej. Dlatego obok dopasowania po
+       * instrumencie sprawdzamy jeszcze tytuł.
+       */
+      headlines: recentNews
+        .filter(
+          (item) =>
+            item.instrumentId === position.instrument.id ||
+            mentionsInstrument(item.title, position.instrument),
+        )
+        .slice(0, 3)
+        .map((item) => item.title),
+    }));
+
+  return {
+    asOf: nowIso(),
+    positionsCount: positions.length,
+    gainers: withChange.filter((p) => (p.dayChangeBp ?? 0) > 0).length,
+    losers: withChange.filter((p) => (p.dayChangeBp ?? 0) < 0).length,
+    portfolioChangeBp: totalValue > 0 && withChange.length > 0 ? Math.round(weightedChange / totalValue) : null,
+    movers,
+    staleCount: positions.filter((p) => p.priceStale).length,
+  };
+}
+
+const SESSION_PROMPT = `Jesteś asystentem inwestora indywidualnego. Dostajesz zestawienie tego, co działo się
+w ostatniej dobie na spółkach z jego portfela: zmiany dzienne, udziały w portfelu i tytuły wiadomości.
+
+Napisz po polsku 3-4 zdania: co ruszyło portfelem najbardziej i czy wiadomości to tłumaczą.
+
+Zasady:
+- Jeśli przy dużym ruchu nie ma wiadomości, napisz „brak wiadomości tłumaczących ten ruch" i nie rozwijaj.
+  Nie wymyślaj przyczyny.
+- Nie doradzaj kupna ani sprzedaży.
+- Wskaż dwie, trzy najważniejsze pozycje — nie przepisuj całej listy.
+
+Styl odpowiedzi — to jest równie ważne, co treść:
+- Pisz o tym, co WIDZISZ w danych, nie o tym, czego w nich nie ma. Nie wyliczaj czynników,
+  których nie znasz (horyzont, tolerancja ryzyka, koszty transakcyjne, sytuacja podatkowa,
+  płynność) — użytkownik wie o nich lepiej niż Ty i takie wyliczanki nic mu nie dają.
+- Żadnych zdań w rodzaju „warto sprawdzić", „należy rozważyć", „dobrze zweryfikować".
+  Jeśli coś w danych wygląda niepokojąco, powiedz co i podaj liczbę.
+- Każde zdanie ma nieść konkret: nazwę pozycji, liczbę, kierunek zmiany. Zdanie bez konkretu
+  wytnij zamiast je pisać.
+- Nie zaczynaj od podsumowania pytania ani od „na podstawie podanych danych".
+- Bez nagłówków, bez list punktowanych, bez formatowania.`;
+
+export async function sessionSummary(portfolioId?: number): Promise<AssistResult<SessionFacts>> {
+  const facts = sessionFacts(activePortfolioIds(portfolioId));
+
+  const payload = [
+    `Pozycji w portfelu: ${facts.positionsCount} (na plusie: ${facts.gainers}, na minusie: ${facts.losers})`,
+    `Zmiana całego portfela: ${facts.portfolioChangeBp === null ? 'brak danych' : pct(facts.portfolioChangeBp)}`,
+    facts.staleCount > 0 ? `Pozycji z nieaktualną ceną: ${facts.staleCount}` : '',
+    '',
+    'Największe ruchy:',
+    ...facts.movers.map(
+      (mover) =>
+        `- ${mover.symbol} (${mover.name}), ${pct(mover.changeBp)}, udział ${pct(mover.sharePortfolioBp)}` +
+        (mover.headlines.length > 0 ? `\n  wiadomości: ${mover.headlines.join(' | ')}` : '\n  brak wiadomości'),
+    ),
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const result = await withModel('sessionSummary', facts, SESSION_PROMPT, payload);
+  if (result.text) saveAnalysis('session_summary', result, { portfolioId, facts });
   return result;
 }
 
@@ -609,11 +860,11 @@ const SINGLE_POSITION_WARN_BP = 1500;
 /** Udział jednego sektora lub regionu, przy którym warto się zatrzymać. */
 const GROUP_WARN_BP = 4000;
 
-export function purchaseCheckFacts(
+export async function purchaseCheckFacts(
   portfolioIds: number[],
   symbol: string,
   amountPlnMinor: number,
-): PurchaseCheckFacts {
+): Promise<PurchaseCheckFacts> {
   const { positions, cashByPortfolio } = buildPositions(portfolioIds);
   const cash = [...cashByPortfolio.values()].reduce((sum, v) => sum + v, 0);
   const before = positions.reduce((sum, p) => sum + p.valuePlnMinor, 0) + cash;
@@ -624,13 +875,24 @@ export function purchaseCheckFacts(
     (p) => p.instrument.symbol.toUpperCase() === needle || p.instrument.symbol.toUpperCase().endsWith(`:${needle}`),
   );
 
-  const catalogue =
+  const local =
     held?.instrument ??
     db
       .select()
       .from(instruments)
       .all()
       .find((i) => i.symbol.toUpperCase() === needle || i.symbol.toUpperCase().endsWith(`:${needle}`));
+
+  /*
+   * Instrument spoza bazy nadal da się ocenić: pytamy dostawcę o sektor
+   * i region, żeby policzyć wpływ na koncentrację. Wcześniej taki symbol
+   * dawał wyłącznie zmianę wartości portfela, czyli najmniej interesującą
+   * część odpowiedzi.
+   *
+   * Świadomie bez zapisu do bazy — sprawdzenie „co by było, gdybym kupił"
+   * nie powinno zaśmiecać listy instrumentów.
+   */
+  const catalogue = local ?? (await lookupUnknownSymbol(needle));
 
   const currentValue = held?.valuePlnMinor ?? 0;
 
@@ -674,10 +936,71 @@ export function purchaseCheckFacts(
     facts.warnings.push(`Region „${country}" urośnie do ${pct(facts.countryShareAfterBp)} portfela.`);
   }
   if (!catalogue) {
-    facts.warnings.push('Tego instrumentu nie ma jeszcze w bazie — wpływ policzony wyłącznie na wartość portfela.');
+    facts.warnings.push(
+      'Nie znaleziono notowanego instrumentu o tym symbolu — wpływ policzony wyłącznie na wartość portfela.',
+    );
+  } else if (!local) {
+    facts.warnings.push('Instrumentu nie ma jeszcze w portfelu — dane pobrane od dostawcy notowań.');
   }
 
   return facts;
+}
+
+/**
+ * Podstawowe dane instrumentu, którego nie ma w bazie.
+ *
+ * Zwraca kształt zgodny z wierszem instrumentu, ale niczego nie zapisuje —
+ * to sprawdzenie hipotezy, nie zakup. Brak trafienia u dostawcy oznacza,
+ * że taki papier po prostu nie jest notowany (jak SpaceX), i wtedy mówimy
+ * to wprost zamiast liczyć na zerach.
+ */
+async function lookupUnknownSymbol(
+  needle: string,
+): Promise<{ symbol: string; assetClass: string; sector: string | null; country: string | null } | null> {
+  try {
+    const { suggestSymbols } = await import('./instruments.js');
+    const [best] = await suggestSymbols(needle);
+    if (!best) return null;
+
+    const { classifyInstrument, localClassification } = await import('./classify.js');
+    const local = localClassification({
+      symbol: best.symbol,
+      name: best.name,
+      exchange: best.exchange,
+      assetClass: best.assetClass,
+    });
+
+    /*
+     * Region wynika z rynku notowania i mamy go od razu, ale sektor zna tylko
+     * dostawca — a bez niego wpływ na koncentrację branżową byłby niepoliczony,
+     * czyli zniknęłaby połowa odpowiedzi.
+     */
+    let sector = local.sector;
+    if (!sector) {
+      const remote = await classifyInstrument({
+        id: -1,
+        symbol: best.symbol,
+        name: best.name,
+        assetClass: best.assetClass,
+        currency: best.currency ?? 'USD',
+        exchange: best.exchange,
+        provider: null,
+        providerSymbol: null,
+        unit: null,
+      } as never);
+      sector = remote.sector;
+    }
+
+    return {
+      symbol: best.symbol,
+      assetClass: best.assetClass,
+      sector,
+      country: local.country,
+    };
+  } catch (err) {
+    log.debug(`Nie udało się sprawdzić „${needle}" u dostawcy: ${errorMessage(err)}`);
+    return null;
+  }
 }
 
 const PURCHASE_PROMPT = `Jesteś asystentem inwestora indywidualnego, który rozważa dokupienie jednej pozycji.
@@ -685,18 +1008,32 @@ const PURCHASE_PROMPT = `Jesteś asystentem inwestora indywidualnego, który roz
 Dostajesz wpływ tego zakupu na strukturę portfela: udział pozycji, klasy aktywów, sektora i regionu
 przed zakupem i po nim, oraz automatycznie wykryte ostrzeżenia.
 
-Napisz po polsku 3-5 zdań: co ten zakup zmienia w strukturze i o co warto się upewnić przed decyzją.
+Napisz po polsku 3-4 zdania o tym, co ten zakup zmienia w strukturze portfela.
 
-Zasady: nie mów „kup" ani „nie kupuj" — decyzja należy do użytkownika, a Ty nie znasz jego sytuacji,
-horyzontu ani dochodów. Nie prognozuj cen. Jeśli struktura po zakupie zostaje zdrowa, napisz to wprost
-zamiast szukać problemów na siłę. Bez nagłówków i bez list punktowanych.`;
+Zasady:
+- Nie wydawaj polecenia „kup" ani „nie kupuj". Pokaż liczby: z ilu na ile procent rośnie udział pozycji,
+  sektora i regionu.
+- Jeśli struktura po zakupie zostaje zdrowa, napisz to jednym zdaniem i skończ. Nie szukaj problemów
+  na siłę i nie dopisuj listy rzeczy do sprawdzenia.
+- Nie prognozuj cen.
+
+Styl odpowiedzi — to jest równie ważne, co treść:
+- Pisz o tym, co WIDZISZ w danych, nie o tym, czego w nich nie ma. Nie wyliczaj czynników,
+  których nie znasz (horyzont, tolerancja ryzyka, koszty transakcyjne, sytuacja podatkowa,
+  płynność) — użytkownik wie o nich lepiej niż Ty i takie wyliczanki nic mu nie dają.
+- Żadnych zdań w rodzaju „warto sprawdzić", „należy rozważyć", „dobrze zweryfikować".
+  Jeśli coś w danych wygląda niepokojąco, powiedz co i podaj liczbę.
+- Każde zdanie ma nieść konkret: nazwę pozycji, liczbę, kierunek zmiany. Zdanie bez konkretu
+  wytnij zamiast je pisać.
+- Nie zaczynaj od podsumowania pytania ani od „na podstawie podanych danych".
+- Bez nagłówków, bez list punktowanych, bez formatowania.`;
 
 export async function purchaseCheck(
   portfolioId: number | undefined,
   symbol: string,
   amountPlnMinor: number,
 ): Promise<AssistResult<PurchaseCheckFacts>> {
-  const facts = purchaseCheckFacts(activePortfolioIds(portfolioId), symbol, amountPlnMinor);
+  const facts = await purchaseCheckFacts(activePortfolioIds(portfolioId), symbol, amountPlnMinor);
 
   const payload = [
     `Rozważany zakup: ${facts.symbol} za ${pln(facts.amountPlnMinor)}`,

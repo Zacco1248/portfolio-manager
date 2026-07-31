@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { TAX_REGIME_LABELS } from '@portfolio/shared';
 import { relativeTime } from '@/lib/format';
@@ -26,6 +26,29 @@ const NAV = [
 export function Layout() {
   const { portfolios, selectedPortfolioId, selectPortfolio, status, theme, toggleTheme, logout } = useApp();
   const [navOpen, setNavOpen] = useState(false);
+
+  /*
+   * Otwarte menu przykrywa całą treść, więc musi się zachowywać jak okno
+   * modalne: Escape zamyka, a tło pod spodem nie przewija się pod palcem.
+   * Sprzątanie w `return` przywraca scroll także wtedy, gdy menu zamknie
+   * się przez nawigację, a nie przez kliknięcie.
+   */
+  useEffect(() => {
+    if (!navOpen) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setNavOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [navOpen]);
 
   return (
     <div className="flex min-h-full flex-col">
@@ -79,12 +102,27 @@ export function Layout() {
         </div>
       </header>
 
-      {/* Na wąskim ekranie nawigacja układa się nad treścią, nie obok niej —
-          w układzie wierszowym zajmowała całą szerokość i wypychała stronę. */}
+      {/*
+        Poniżej `lg` nawigacja jest nakładką, nie elementem przepływu.
+        Wcześniej wchodziła w układ kolumnowy i po otwarciu spychała treść
+        o wysokość szesnastu pozycji menu — na telefonie strona wyglądała
+        na pustą, bo `main` lądował poza ekranem.
+      */}
       <div className="flex flex-1 flex-col lg:flex-row">
+        {navOpen && (
+          <button
+            type="button"
+            className="fixed inset-0 z-30 bg-black/60 lg:hidden"
+            aria-label="Zamknij menu"
+            onClick={() => setNavOpen(false)}
+          />
+        )}
+
         <nav
           id="menu-glowne"
-          className={`${navOpen ? 'block' : 'hidden'} w-full shrink-0 border-b border-surface-border bg-surface-raised p-2 lg:block lg:w-48 lg:border-b-0 lg:border-r`}
+          className={`${
+            navOpen ? 'fixed' : 'hidden'
+          } inset-y-0 left-0 z-40 w-64 shrink-0 overflow-y-auto border-r border-surface-border bg-surface-raised p-2 lg:static lg:z-auto lg:block lg:w-48 lg:overflow-visible`}
         >
           <ul className="space-y-0.5">
             {NAV.map((item) => (

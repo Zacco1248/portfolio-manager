@@ -15,11 +15,13 @@ import {
 } from '@portfolio/shared';
 import type { AlertKind, RebalanceResponse } from '@portfolio/shared';
 import { db } from '../db/index.js';
-import { alerts, instruments, portfolios } from '../db/schema.js';
-import { notFound } from '../lib/errors.js';
+import { alerts, instruments, newsItems, portfolios, transactions } from '../db/schema.js';
+import { errorMessage, notFound } from '../lib/errors.js';
+import { fetchText } from '../lib/http-client.js';
+import { extractArticle } from '../lib/readability.js';
 import { asyncHandler } from '../lib/http.js';
 import { evaluateAlerts, recentAlertEvents } from '../services/alerts.js';
-import { AI_FEATURES, AI_PROVIDERS, aiStatus, updateAiSettings } from '../services/ai-config.js';
+import { AI_FEATURES, AI_PROVIDERS, aiStatus, setApiKey, updateAiSettings } from '../services/ai-config.js';
 import { classifyAll } from '../services/classify.js';
 import { duplicateSummary } from '../services/duplicates.js';
 import { buildContext, buildSuggestions } from '../services/suggestions.js';
@@ -50,10 +52,10 @@ import {
 import { activePortfolioIds, buildPositions, netInvested, toInstrumentDto } from '../services/positions.js';
 import { buildPlan } from '../services/rebalance.js';
 import { detectConcentration, detectStalePrices, loadThresholds } from '../services/risk.js';
-import { allSettings, updateSettings } from '../services/settings.js';
+import { allSettings, setSetting, updateSettings } from '../services/settings.js';
 import { deleteTarget, listTargets, loadTargets, targetsSumBp, upsertTarget } from '../services/targets.js';
 import { availableTaxYears, buildTaxReport, taxReportToCsv } from '../services/tax.js';
-import { testTelegram } from '../services/telegram.js';
+import { isTelegramEnabled, testTelegram } from '../services/telegram.js';
 
 export const toolsRouter = Router();
 
@@ -211,6 +213,81 @@ toolsRouter.get('/news', (req, res, next) => {
   if (!parsed.success) return next(parsed.error);
   res.json({ items: listNews(parsed.data), disclaimer: newsDisclaimer });
 });
+
+/**
+ * Treść artykułu do przeczytania w aplikacji.
+ *
+ * Pobieramy stronę na żądanie i wyciągamy z niej tekst — nigdzie go nie
+ * zapisujemy, bo to podgląd, a nie archiwum. Adres źródła wraca razem
+ * z treścią, żeby przejście do oryginału było jednym kliknięciem.
+ */
+toolsRouter.get(
+  '/news/:id/tresc',
+  asyncHandler(async (req, res, next) => {
+    const id = idParam.safeParse(req.params.id);
+    if (!id.success) return next(id.error);
+
+    const item = db.select().from(newsItems).where(eq(newsItems.id, id.data)).get();
+    if (!item) return next(notFound('Nie ma takiej wiadomości'));
+
+    /*
+     * Google News nie linkuje do artykułu wprost — daje własną stronę
+     * pośredniczącą, która ujawnia adres docelowy dopiero po uruchomieniu
+     * skryptów. Odtwarzanie tego wewnętrznego protokołu byłoby kruche
+     * i zmieniałoby się bez ostrzeżenia, więc mówimy wprost, że dla tego
+     * źródła podgląd nie zadziała.
+     */
+    if (/(^|\.)news\.google\.com$/i.test(new URL(item.url).hostname)) {
+      return res.json({
+        url: item.url,
+        title: item.title,
+        paragraphs: [],
+        truncated: false,
+        message:
+          'Ta wiadomość pochodzi z Google News, które linkuje przez własną stronę pośredniczącą — treści ' +
+          'nie da się stąd odczytać. Otwórz oryginał, żeby przejść do artykułu.',
+      });
+    }
+
+    try {
+      const html = await fetchText(item.url, { retries: 1, minIntervalMs: 500, timeoutMs: 15_000 });
+      const article = extractArticle(html);
+
+      if (article.paragraphs.length === 0) {
+        return res.json({
+          url: item.url,
+          title: item.title,
+          paragraphs: [],
+          truncated: false,
+          message: article.paywalled
+            ? 'Serwis udostępnia ten materiał tylko prenumeratorom — w źródle strony nie ma treści do odczytania.'
+            : 'Nie udało się odczytać treści — strona wymaga przeglądarki albo ukrywa tekst za zgodą na pliki cookie.',
+        });
+      }
+
+      res.json({
+        url: item.url,
+        // Tytuł ze strony bywa pełniejszy niż ucięty tytuł z kanału RSS.
+        title: article.title ?? item.title,
+        paragraphs: article.paragraphs,
+        truncated: article.truncated,
+        // Przy paywallu mamy zwykle sam lead — mówimy o tym, zamiast zostawiać
+        // wrażenie, że artykuł tyle właśnie liczy.
+        message: article.paywalled
+          ? 'To fragment — dalsza część materiału jest dostępna tylko dla prenumeratorów serwisu.'
+          : null,
+      });
+    } catch (err) {
+      res.json({
+        url: item.url,
+        title: item.title,
+        paragraphs: [],
+        truncated: false,
+        message: `Nie udało się pobrać strony: ${errorMessage(err)}`,
+      });
+    }
+  }),
+);
 
 toolsRouter.post(
   '/news/refresh',
@@ -413,14 +490,18 @@ toolsRouter.put('/holdings/:instrumentId', (req, res, next) => {
  */
 // ── Podsumowanie osiągnięć i projekcja ───────────────────────
 toolsRouter.get('/insights', (req, res, next) => {
-  const parsed = portfolioQuerySchema.safeParse(req.query);
+  const parsed = portfolioQuerySchema
+    // Horyzont projekcji wybierany w interfejsie; poza listą i tak zostanie
+    // domknięty do rozsądnego zakresu w `buildProjection`.
+    .extend({ years: z.coerce.number().int().positive().max(40).optional() })
+    .safeParse(req.query);
   if (!parsed.success) return next(parsed.error);
 
   const ids = activePortfolioIds(parsed.data.portfolioId);
 
   res.json({
     insights: buildInsights(ids),
-    projection: buildProjection(ids),
+    projection: buildProjection(ids, parsed.data.years),
     emergencyFund: emergencyFundStatus(),
     /** Komentarz przychodzi osobno — patrz /insights/narrative. */
     narrative: null,
@@ -443,6 +524,43 @@ toolsRouter.get(
       [...cashByPortfolio.values()].reduce((sum, v) => sum + v, 0);
     const invested = netInvested(ids);
 
+    /*
+     * Kontekst dla modelu: sam wynik zbiorczy nie pozwalał odpowiedzieć na
+     * pytanie „co go zaniżyło". Wszystko liczone lokalnie — model dostaje
+     * gotowe liczby i tylko je opisuje.
+     */
+    const byContribution = [...positions].sort((a, b) => b.unrealizedPlnMinor - a.unrealizedPlnMinor);
+    const contributors = [...byContribution.slice(0, 3), ...byContribution.slice(-3)]
+      // Przy krótkiej liście oba wycinki zachodzą na siebie.
+      .filter((position, index, list) => list.findIndex((p) => p.instrument.id === position.instrument.id) === index)
+      .map((position) => ({
+        symbol: position.instrument.symbol,
+        name: position.instrument.name,
+        resultPlnMinor: position.unrealizedPlnMinor,
+        returnBp: position.unrealizedBp,
+        sharePortfolioBp: position.sharePortfolioBp,
+      }));
+
+    const cash = [...cashByPortfolio.values()].reduce((sum, v) => sum + v, 0);
+    const targets = loadTargets(parsed.data.portfolioId ?? null, 'asset_class');
+    const plan = targets.length > 0
+      ? buildPlan({ positions, cashPlnMinor: cash, targets, dimension: 'asset_class', contributionPlnMinor: 0 }, 'full')
+      : null;
+
+    const thresholds = loadThresholds();
+    const warnings = [
+      ...detectConcentration(positions, thresholds),
+      ...detectStalePrices(positions),
+    ].map((warning) => warning.message);
+
+    // Prowizje i podatki od początku prowadzenia portfela — realny koszt,
+    // który w samym wyniku jest niewidoczny.
+    const costs = db
+      .select({ fee: transactions.feeMinor, tax: transactions.taxMinor, portfolioId: transactions.portfolioId })
+      .from(transactions)
+      .all()
+      .filter((row) => ids.includes(row.portfolioId));
+
     const narrative = await generateNarrative({
       valuePlnMinor: value,
       investedPlnMinor: invested,
@@ -450,6 +568,17 @@ toolsRouter.get(
       monthlyContributionPlnMinor: projection.monthlyContributionPlnMinor,
       projectedIn5YearsPlnMinor: projection.points.at(-1)?.valuePlnMinor ?? value,
       emergencyFundCoveredMonths: emergencyFund.coveredMonths,
+      contributors,
+      drift: (plan?.actions ?? [])
+        .filter((action) => !action.withinTolerance)
+        .map((action) => ({
+          label: action.label,
+          currentShareBp: action.currentShareBp,
+          targetShareBp: action.targetShareBp,
+        })),
+      warnings,
+      feesPlnMinor: costs.reduce((sum, row) => sum + row.fee, 0),
+      taxesPlnMinor: costs.reduce((sum, row) => sum + row.tax, 0),
     });
 
     res.json({ narrative });
@@ -481,6 +610,62 @@ toolsRouter.patch('/ai', (req, res, next) => {
   updateAiSettings(parsed.data);
   res.json(aiStatus());
 });
+
+/**
+ * Zapis klucza API dostawcy modelu.
+ *
+ * Osobna trasa, a nie `PATCH /settings`: tamta przyjmuje dowolny rekord
+ * i odsyła całą zawartość ustawień, więc klucz wracałby do przeglądarki
+ * w postaci jawnej. Tutaj wraca wyłącznie maska.
+ *
+ * Po zapisie od razu sprawdzamy połączenie — inaczej użytkownik dowiadywałby
+ * się o literówce dopiero przy pierwszym użyciu funkcji AI.
+ */
+toolsRouter.post(
+  '/ai/key',
+  asyncHandler(async (req, res, next) => {
+    const parsed = z
+      .object({
+        provider: z.enum(AI_PROVIDERS),
+        // Pusty ciąg czyści klucz i przywraca ewentualną wartość z `.env`.
+        key: z.string().trim().max(200),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) return next(parsed.error);
+
+    setApiKey(parsed.data.provider, parsed.data.key || null);
+
+    const test = parsed.data.key ? await testAiConnection() : null;
+    res.json({ status: aiStatus(), test });
+  }),
+);
+
+/**
+ * Zapis danych bota Telegram. Jak przy kluczach AI: wartości nie wracają
+ * do przeglądarki, a puste pole czyści wpis i przywraca ustawienie z `.env`.
+ */
+toolsRouter.post(
+  '/telegram/config',
+  asyncHandler(async (req, res, next) => {
+    const parsed = z
+      .object({
+        botToken: z.string().trim().max(200).optional(),
+        chatId: z.string().trim().max(64).optional(),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) return next(parsed.error);
+
+    if (parsed.data.botToken !== undefined) {
+      setSetting('telegramBotToken', parsed.data.botToken || null);
+    }
+    if (parsed.data.chatId !== undefined) {
+      setSetting('telegramChatId', parsed.data.chatId || null);
+    }
+
+    const test = isTelegramEnabled() ? await testTelegram() : null;
+    res.json({ configured: isTelegramEnabled(), test });
+  }),
+);
 
 // ── Automatyczna klasyfikacja instrumentów ───────────────────
 toolsRouter.post(

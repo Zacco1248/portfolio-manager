@@ -1,4 +1,5 @@
 import type {
+  AccountKind,
   AlertKind,
   AllocationDimension,
   AssetClass,
@@ -37,6 +38,23 @@ export interface Portfolio {
   createdAt: string;
 }
 
+/**
+ * Konto — miejsce, w którym fizycznie leżą aktywa (rachunek maklerski, bank,
+ * giełda krypto, sejf). Wymiar niezależny od portfela.
+ */
+export interface Account {
+  id: number;
+  name: string;
+  kind: AccountKind;
+  institution: string | null;
+  currency: string;
+  note: string | null;
+  archived: boolean;
+  createdAt: string;
+  /** Liczba transakcji — router odmawia usunięcia konta, które ich używa. */
+  transactionCount?: number;
+}
+
 export interface Instrument {
   id: number;
   symbol: string;
@@ -59,6 +77,8 @@ export interface Transaction {
   id: number;
   portfolioId: number;
   instrumentId: number | null;
+  /** Konto, na którym operacja się odbyła. null = nieprzypisane. */
+  accountId: number | null;
   type: TransactionType;
   tradeDate: string;
   settlementDate: string | null;
@@ -82,6 +102,7 @@ export interface Transaction {
   createdAt: string;
   instrument?: Instrument | null;
   portfolioName?: string;
+  accountName?: string | null;
 }
 
 export interface Quote {
@@ -112,6 +133,52 @@ export interface Position {
   sharePortfolioBp: number;
   priceStale: boolean;
   fxRateE6: number;
+  /**
+   * Rozbicie pozycji na konta. Obecne tylko wtedy, gdy papier leży na więcej
+   * niż jednym koncie albo gdy konto w ogóle jest przypisane.
+   */
+  accounts?: PositionAccountSlice[];
+}
+
+/** Część pozycji leżąca na jednym koncie. Suma części równa się pozycji co do grosza. */
+export interface PositionAccountSlice {
+  accountId: number | null;
+  accountName: string | null;
+  qtyE8: number;
+  costPlnMinor: number;
+  valuePlnMinor: number;
+}
+
+/**
+ * Zestawienie jednego konta na dashboardzie — odpowiedź na pytanie
+ * „ile na plus, ile na minus w danym miejscu".
+ */
+export interface AccountBreakdown {
+  accountId: number | null;
+  /** „Nieprzypisane" dla accountId === null. */
+  name: string;
+  kind: AccountKind | null;
+  /**
+   * Kapitał wniesiony na konto z zewnątrz: wpłaty minus wypłaty.
+   *
+   * Świadomie NIE obejmuje przepływów z kupna i sprzedaży — te tylko
+   * przesuwają pieniądze między gotówką a papierami wewnątrz konta
+   * i wliczone podnosiłyby „wpłacono" o obroty.
+   */
+  contributedPlnMinor: number;
+  cashPlnMinor: number;
+  positionsValuePlnMinor: number;
+  valuePlnMinor: number;
+  realizedPlnMinor: number;
+  unrealizedPlnMinor: number;
+  /** Wartość bieżąca minus kapitał wniesiony. */
+  resultPlnMinor: number;
+}
+
+export interface AccountsReport {
+  accounts: AccountBreakdown[];
+  totalValuePlnMinor: number;
+  totalResultPlnMinor: number;
 }
 
 export interface AllocationSlice {
@@ -142,7 +209,14 @@ export interface SnapshotPoint {
   date: string;
   valuePlnMinor: number;
   investedPlnMinor: number;
-  byAssetClass?: Partial<Record<AssetClass, number>>;
+  /**
+   * Rozbicie wartości na klasy aktywów w dniu pomiaru.
+   *
+   * Świadomie `string`, nie `AssetClass`: snapshoty sprzed rozbicia klas mają
+   * klucze grupowe („stock"), a te zapisane później — liściaste („stock_pl").
+   * Odczyt zwija jedne i drugie do poziomu grupy.
+   */
+  byAssetClass?: Record<string, number>;
 }
 
 export interface DashboardResponse {

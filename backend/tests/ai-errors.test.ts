@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { explainAiError } from '../src/services/ai.js';
 
 describe('tłumaczenie błędów dostawcy modelu', () => {
-  it('odrzucony klucz wskazuje zmienną środowiskową właściwą dla dostawcy', () => {
-    expect(explainAiError('401 Unauthorized', 'anthropic')).toContain('ANTHROPIC_API_KEY');
-    expect(explainAiError('invalid_api_key', 'openai')).toContain('OPENAI_API_KEY');
+  it('odrzucony klucz wskazuje dostawcę, którego dotyczy', () => {
+    /*
+     * Komunikat mówi o dostawcy, a nie o zmiennej z `.env`: klucz da się teraz
+     * wpisać w Ustawieniach i wtedy odsyłanie do pliku byłoby myląco fałszywe.
+     */
+    expect(explainAiError('401 Unauthorized', 'anthropic')).toContain('Anthropic');
+    expect(explainAiError('invalid_api_key', 'openai')).toContain('OpenAI');
   });
 
   it('nieznany model kieruje do wyboru modelu, nie do klucza', () => {

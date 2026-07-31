@@ -142,7 +142,8 @@ export async function refreshBenchmark(key: string, from: IsoDate): Promise<numb
     {
       id: -1,
       symbol: meta.symbol,
-      assetClass: 'etf',
+      // Benchmarki to zagraniczne indeksy — klasa służy tylko doborowi dostawcy.
+      assetClass: 'etf_foreign',
       currency: meta.currency,
       exchange: null,
       provider: 'yahoo',

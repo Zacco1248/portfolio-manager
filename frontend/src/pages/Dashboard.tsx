@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Area,
@@ -12,9 +12,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { ACCOUNT_KIND_LABELS, AI_DISCLAIMER } from '@portfolio/shared';
 import type { AllocationSlice, SnapshotPoint } from '@portfolio/shared';
+import type { SessionFacts } from '@/lib/api';
 import { RefreshBar } from '@/components/RefreshBar';
-import { Card, EmptyState, ErrorBanner, KpiTile, Spinner, WarningList } from '@/components/ui';
+import { AiDisclaimer, AiPending, Card, DataTable, EmptyState, ErrorBanner, KpiTile, Spinner, WarningList } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatDate, formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
@@ -100,6 +102,10 @@ export function Dashboard() {
 
       <EmergencyFundCard portfolioId={portfolioId} />
 
+      <AccountsCard portfolioId={portfolioId} />
+
+      <SessionSummaryCard portfolioId={portfolioId} />
+
       <div className="grid gap-4 xl:grid-cols-3">
         <Card title="Wartość portfela w czasie" className="xl:col-span-2">
           <ValueChart history={history} />
@@ -111,11 +117,14 @@ export function Dashboard() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
+        {/* Sektory jako wykres — przy kilkunastu branżach udziały są czytelniejsze
+            na kole niż na liście pasków. Waluty i geografia zostają listami:
+            tam pozycji jest kilka i lista niesie tyle samo, zajmując mniej. */}
+        <Card title="Alokacja sektorowa">
+          <AllocationChart slices={allocation.sector} emptyHint="Uzupełnij sektory na instrumentach." />
+        </Card>
         <Card title="Alokacja walutowa">
           <AllocationList slices={allocation.currency} />
-        </Card>
-        <Card title="Alokacja sektorowa">
-          <AllocationList slices={allocation.sector} emptyHint="Uzupełnij sektory na instrumentach." />
         </Card>
         <Card title="Alokacja geograficzna">
           <AllocationList slices={allocation.geo} emptyHint="Uzupełnij kraje na instrumentach." />
@@ -220,6 +229,68 @@ function EmergencyFundCard({ portfolioId }: { portfolioId: number | undefined })
   );
 }
 
+/**
+ * Wynik w rozbiciu na konta — „ile na plus, ile na minus w danym miejscu".
+ *
+ * Osobne zapytanie zamiast rozdmuchiwania odpowiedzi pulpitu: karta ma się
+ * w ogóle nie pojawiać, dopóki użytkownik nie zacznie przypisywać kont.
+ */
+function AccountsCard({ portfolioId }: { portfolioId: number | undefined }) {
+  const { data } = useAsync(() => api.analytics.accounts(portfolioId), [portfolioId]);
+
+  if (!data || data.accounts.length === 0) return null;
+
+  // Jedno konto obejmujące wszystko nie niesie żadnej informacji ponad to,
+  // co pokazują kafelki wyżej.
+  if (data.accounts.length === 1 && data.accounts[0]?.accountId !== null) return null;
+
+  return (
+    <Card title="Konta">
+      <DataTable
+        headers={[
+          'Konto',
+          { label: 'Wpłacono netto', align: 'right' },
+          { label: 'Gotówka', align: 'right' },
+          { label: 'Wartość', align: 'right' },
+          { label: 'Wynik', align: 'right' },
+        ]}
+      >
+        {data.accounts.map((account) => (
+          <tr key={account.accountId ?? 'none'} className="hover:bg-surface-overlay/50">
+            <td className="table-cell">
+              <span className={account.accountId === null ? 'text-content-muted' : 'font-medium'}>
+                {account.name}
+              </span>
+              {account.kind && (
+                <span className="ml-2 text-2xs text-content-muted">{ACCOUNT_KIND_LABELS[account.kind]}</span>
+              )}
+            </td>
+            <td className="table-cell tabular text-right">{formatPln(account.contributedPlnMinor)}</td>
+            <td className="table-cell tabular text-right">{formatPln(account.cashPlnMinor)}</td>
+            <td className="table-cell tabular text-right font-medium">{formatPln(account.valuePlnMinor)}</td>
+            <td className={`table-cell tabular text-right ${toneClass(account.resultPlnMinor)}`}>
+              {formatPln(account.resultPlnMinor, { sign: true })}
+            </td>
+          </tr>
+        ))}
+        <tr className="border-t border-surface-border font-medium">
+          <td className="table-cell">Razem</td>
+          <td className="table-cell" />
+          <td className="table-cell" />
+          <td className="table-cell tabular text-right">{formatPln(data.totalValuePlnMinor)}</td>
+          <td className={`table-cell tabular text-right ${toneClass(data.totalResultPlnMinor)}`}>
+            {formatPln(data.totalResultPlnMinor, { sign: true })}
+          </td>
+        </tr>
+      </DataTable>
+      <p className="px-4 pb-4 pt-2 text-2xs text-content-muted">
+        Wpłacono = wpłaty minus wypłaty na danym koncie; wynik = wartość bieżąca minus ta kwota. Papiery
+        przeniesione między rachunkami liczą się tam, gdzie zostały kupione.
+      </p>
+    </Card>
+  );
+}
+
 function ValueChart({ history }: { history: SnapshotPoint[] }) {
   const series = useMemo(
     () =>
@@ -300,12 +371,42 @@ function ValueChart({ history }: { history: SnapshotPoint[] }) {
   );
 }
 
-function AllocationChart({ slices }: { slices: AllocationSlice[] }) {
+function AllocationChart({ slices, emptyHint }: { slices: AllocationSlice[]; emptyHint?: string }) {
   if (slices.length === 0) {
-    return <p className="px-4 pb-4 pt-2 text-sm text-content-muted">Brak pozycji do pokazania.</p>;
+    return (
+      <p className="px-4 pb-4 pt-2 text-sm text-content-muted">
+        {emptyHint ?? 'Brak pozycji do pokazania.'}
+      </p>
+    );
   }
 
-  const data = slices.map((slice) => ({ name: slice.label, value: slice.valuePlnMinor / 100, shareBp: slice.shareBp }));
+  /*
+   * Paleta ma osiem odcieni, więc przy większej liczbie kategorii kolory
+   * zaczynają się powtarzać i wykres przestaje cokolwiek mówić. Ogon zbieramy
+   * w jedną pozycję — udziały poniżej progu i tak są nieczytelne na kole.
+   */
+  const MAX_SLICES = 7;
+  const sorted = [...slices].sort((a, b) => b.valuePlnMinor - a.valuePlnMinor);
+  const head = sorted.slice(0, MAX_SLICES);
+  const tail = sorted.slice(MAX_SLICES);
+  const visible =
+    tail.length === 0
+      ? head
+      : [
+          ...head,
+          {
+            key: 'pozostale',
+            label: `Pozostałe (${tail.length})`,
+            valuePlnMinor: tail.reduce((sum, slice) => sum + slice.valuePlnMinor, 0),
+            shareBp: tail.reduce((sum, slice) => sum + slice.shareBp, 0),
+          },
+        ];
+
+  const data = visible.map((slice) => ({
+    name: slice.label,
+    value: slice.valuePlnMinor / 100,
+    shareBp: slice.shareBp,
+  }));
 
   return (
     <div className="h-64 px-2 pb-2 pt-3">
@@ -370,5 +471,87 @@ function AllocationList({ slices, emptyHint }: { slices: AllocationSlice[]; empt
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Podsumowanie ostatniej doby na spółkach z portfela.
+ *
+ * Karta pojawia się tylko wtedy, gdy funkcja AI jest włączona — poza tym
+ * pulpit nie ma powodu odsyłać do ustawień. Wynik liczy się na żądanie,
+ * bo kosztuje wywołanie modelu.
+ */
+function SessionSummaryCard({ portfolioId }: { portfolioId: number | undefined }) {
+  const ai = useAsync(() => api.ai.status(), []);
+  const [state, setState] = useState<{ busy: boolean; text: string | null; facts: SessionFacts | null }>({
+    busy: false,
+    text: null,
+    facts: null,
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const feature = ai.data?.features.find((f) => f.key === 'sessionSummary');
+  if (!feature?.available) return null;
+
+  const run = async () => {
+    setState({ busy: true, text: null, facts: null });
+    setError(null);
+    try {
+      const result = await api.assist.sessionSummary(portfolioId);
+      // Funkcja bywa wyłączona mimo widocznego przycisku — stan mógł się
+      // zmienić w innej karcie przeglądarki.
+      if (result.unavailableReason) {
+        setState({ busy: false, text: null, facts: result.data });
+        setError(result.unavailableReason);
+        return;
+      }
+      setState({ busy: false, text: result.text, facts: result.data });
+    } catch (err) {
+      setState({ busy: false, text: null, facts: null });
+      setError(err instanceof Error ? err.message : 'Nie udało się przygotować podsumowania');
+    }
+  };
+
+  return (
+    <Card
+      title="Co się dziś działo"
+      action={
+        <button type="button" className="btn text-2xs" disabled={state.busy} onClick={() => void run()}>
+          {state.busy ? 'Analizuję…' : 'Podsumuj ostatnią dobę'}
+        </button>
+      }
+    >
+      {!state.text && !state.busy && !error && (
+        <p className="px-4 pb-4 pt-2 text-2xs text-content-muted">
+          Zbiera zmiany dzienne spółek z portfela i wiadomości z ostatnich 24 godzin, po czym opisuje, co
+          poruszyło portfelem najbardziej.
+        </p>
+      )}
+
+      {state.busy && <AiPending label="Zbieram dane z ostatniej doby…" />}
+      {error && <ErrorBanner message={error} onRetry={() => void run()} />}
+
+      {state.facts && (
+        <div className="grid grid-cols-2 gap-3 px-4 pb-2 pt-2 sm:grid-cols-4">
+          <KpiTile
+            label="Zmiana portfela"
+            value={formatPercent(state.facts.portfolioChangeBp, { sign: true })}
+            hint="ważona udziałem"
+          />
+          <KpiTile label="Na plusie" value={String(state.facts.gainers)} hint={`z ${state.facts.positionsCount} pozycji`} />
+          <KpiTile label="Na minusie" value={String(state.facts.losers)} />
+          {state.facts.staleCount > 0 && (
+            <KpiTile label="Nieaktualne ceny" value={String(state.facts.staleCount)} hint="pozycji" />
+          )}
+        </div>
+      )}
+
+      {state.text && (
+        <div className="space-y-3 px-4 pb-4">
+          <p className="whitespace-pre-line text-sm leading-relaxed">{state.text}</p>
+          <AiDisclaimer text={AI_DISCLAIMER} />
+        </div>
+      )}
+    </Card>
   );
 }

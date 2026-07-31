@@ -1,3 +1,4 @@
+import { equityClassFor } from '@portfolio/shared';
 import type { AssetClass, TransactionType } from '@portfolio/shared';
 import { normalizeDate } from '../lib/dates.js';
 import type { ColumnMapping, ImportParser, ParseResult, ParsedRow, ParserFileMeta } from './types.js';
@@ -211,14 +212,17 @@ export const csvParser: ImportParser = {
       }
 
       const symbol = get('symbol') || null;
+      const currency = (get('currency') || 'PLN').toUpperCase();
       rows.push({
         rowId: `${r}`,
         tradeDate,
         type,
         rawSymbol: symbol,
         instrumentName: get('name') || null,
-        assetClass: guessAssetClass(symbol),
-        currency: (get('currency') || 'PLN').toUpperCase(),
+        // Format generyczny nie ma ustalonej kolumny konta.
+        account: null,
+        assetClass: guessAssetClass(symbol, currency),
+        currency,
         currencyInferred: get('currency') === '',
         quantity: get('quantity') || '0',
         price: get('price') || '0',
@@ -243,8 +247,9 @@ export const csvParser: ImportParser = {
  */
 const CRYPTO_TICKERS = new Set(['BTC', 'ETH', 'SOL', 'ADA', 'DOT', 'XRP', 'DOGE', 'LTC', 'AVAX', 'MATIC']);
 
-function guessAssetClass(symbol: string | null): AssetClass {
+function guessAssetClass(symbol: string | null, currency = ''): AssetClass {
   if (!symbol) return 'cash';
   const base = symbol.split(/[/:-]/)[0]?.toUpperCase() ?? '';
-  return CRYPTO_TICKERS.has(base) ? 'crypto' : 'stock';
+  if (CRYPTO_TICKERS.has(base)) return 'crypto';
+  return equityClassFor('stock', { symbol, exchange: null, currency });
 }

@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { AiDisclaimer, Card, EmptyState, ErrorBanner, Field, Spinner, Toast, useToast } from '@/components/ui';
+import { Link } from 'react-router-dom';
+import type { NewsItem } from '@portfolio/shared';
+import { AiDisclaimer, Card, EmptyState, ErrorBanner, Field, Modal, Spinner, Toast, useToast } from '@/components/ui';
 import { api } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
@@ -22,6 +24,8 @@ export function News() {
   const [importance, setImportance] = useState('');
   const [sentiment, setSentiment] = useState('');
   const [busy, setBusy] = useState(false);
+  // Artykuł otwarty w czytniku; `null` = modal zamknięty.
+  const [reading, setReading] = useState<NewsItem | null>(null);
   const { toast, show, dismiss } = useToast();
 
   const news = useAsync(
@@ -64,13 +68,7 @@ export function News() {
         </button>
       </div>
 
-      {status && !status.features.ai && (
-        <p className="rounded-card border border-surface-border bg-surface-overlay px-4 py-3 text-2xs text-content-muted">
-          Analiza AI jest wyłączona — brak <code>ANTHROPIC_API_KEY</code> w pliku <code>.env</code>. Wiadomości
-          pokazują się jako surowe nagłówki z linkami do źródeł. Filtry po sentymencie i wadze zadziałają dopiero
-          po włączeniu analizy.
-        </p>
-      )}
+      <NewsAiNotice />
 
       <Card
         title="Obserwowane spółki"
@@ -168,10 +166,30 @@ export function News() {
                       </header>
 
                       <h3 className="mt-2 text-sm font-medium">
-                        <a href={item.url} target="_blank" rel="noreferrer noopener" className="hover:text-accent">
+                        {/* Tytuł otwiera podgląd w aplikacji; do oryginału
+                            prowadzi osobny odsyłacz pod spodem. */}
+                        <button
+                          type="button"
+                          className="text-left hover:text-accent"
+                          onClick={() => setReading(item)}
+                        >
                           {item.title}
-                        </a>
+                        </button>
                       </h3>
+
+                      <div className="mt-1 flex gap-3 text-2xs">
+                        <button type="button" className="text-accent hover:underline" onClick={() => setReading(item)}>
+                          Czytaj tutaj
+                        </button>
+                        <a
+                          href={item.url}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="text-content-muted hover:text-accent"
+                        >
+                          Otwórz źródło ↗
+                        </a>
+                      </div>
 
                       {item.aiSummaryPl && (
                         <div className="mt-1.5">
@@ -199,6 +217,8 @@ export function News() {
         </>
       )}
 
+      {reading && <ArticleReader item={reading} onClose={() => setReading(null)} />}
+
       {toast && <Toast message={toast.message} tone={toast.tone} onDismiss={dismiss} />}
     </div>
   );
@@ -217,5 +237,104 @@ function Arguments({ title, items, tone }: { title: string; items: string[]; ton
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * Dlaczego streszczeń nie ma.
+ *
+ * Funkcja bywa niedostępna z dwóch różnych powodów — brakuje klucza albo
+ * użytkownik jej nie włączył — a wcześniejszy komunikat zawsze obwiniał brak
+ * klucza w `.env`. Powód bierzemy więc z konfiguracji i, gdy da się to zrobić
+ * jednym kliknięciem, od razu proponujemy włączenie.
+ */
+function NewsAiNotice() {
+  const { data, reload } = useAsync(() => api.ai.status(), []);
+  const [busy, setBusy] = useState(false);
+
+  const feature = data?.features.find((f) => f.key === 'news');
+  if (!feature || feature.available) return null;
+
+  const hasKey = data!.keys.anthropic || data!.keys.openai;
+
+  const enable = async () => {
+    setBusy(true);
+    try {
+      await api.ai.update({ features: { news: true } });
+      reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-card border border-surface-border bg-surface-overlay px-4 py-3 text-2xs text-content-muted">
+      <span className="flex-1">
+        {feature.reason} Wiadomości pokazują się jako surowe nagłówki z linkami do źródeł — bez streszczeń po
+        polsku. Filtry sentymentu i wagi też wymagają analizy.
+      </span>
+
+      {hasKey && !feature.enabled ? (
+        <button type="button" className="btn btn-primary text-2xs" disabled={busy} onClick={() => void enable()}>
+          {busy ? 'Włączam…' : 'Włącz streszczenia'}
+        </button>
+      ) : (
+        <Link className="btn text-2xs" to="/ustawienia">
+          Ustawienia
+        </Link>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Podgląd artykułu bez opuszczania aplikacji.
+ *
+ * Treść pobiera serwer i wyciąga z niej sam tekst — nic nie jest zapisywane,
+ * a odsyłacz do oryginału zostaje widoczny. Nie każda strona da się w ten
+ * sposób odczytać: część serwisów wymaga przeglądarki albo chowa tekst
+ * za zgodą na pliki cookie, i wtedy mówimy to wprost.
+ */
+function ArticleReader({ item, onClose }: { item: NewsItem; onClose: () => void }) {
+  const { data, error, loading, reload } = useAsync(() => api.news.content(item.id), [item.id]);
+
+  return (
+    <Modal title={data?.title ?? item.title} onClose={onClose}>
+      <div className="mb-3 flex flex-wrap items-center gap-3 text-2xs text-content-muted">
+        <span>
+          {item.source} · {relativeTime(item.publishedAt)}
+        </span>
+        <a
+          href={item.url}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="ml-auto text-accent hover:underline"
+        >
+          Otwórz oryginał ↗
+        </a>
+      </div>
+
+      {loading && <Spinner label="Pobieram treść…" />}
+      {error && <ErrorBanner message={error} onRetry={reload} />}
+
+      {data?.message && (
+        <div className="rounded-card border border-surface-border bg-surface-overlay px-3 py-2 text-2xs text-content-muted">
+          {data.message}
+        </div>
+      )}
+
+      {data && data.paragraphs.length > 0 && (
+        <div className="max-h-[65vh] space-y-3 overflow-y-auto pr-1 text-sm leading-relaxed">
+          {data.paragraphs.map((paragraph, index) => (
+            <p key={index}>{paragraph}</p>
+          ))}
+          {data.truncated && (
+            <p className="text-2xs text-content-muted">
+              Tekst przycięty — dalszą część przeczytasz w oryginale.
+            </p>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }

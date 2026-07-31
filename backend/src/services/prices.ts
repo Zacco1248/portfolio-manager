@@ -221,6 +221,26 @@ function isStale(ts: string): boolean {
   return ageHours > 80;
 }
 
+/**
+ * Czy historia notowań instrumentu wymaga uzupełnienia.
+ *
+ * Sama liczba świec nic nie mówi: papier z czterystoma świecami kończącymi się
+ * rok temu ma „dużo historii", a wskaźniki liczone z niej są bezużyteczne.
+ * Liczy się wiek ostatniej świecy.
+ */
+export function historyNeedsRefresh(instrumentId: number): boolean {
+  const latest = db
+    .select({ date: pricesDaily.date })
+    .from(pricesDaily)
+    .where(eq(pricesDaily.instrumentId, instrumentId))
+    .orderBy(desc(pricesDaily.date))
+    .limit(1)
+    .get();
+
+  if (!latest) return true;
+  return isStale(`${latest.date}T00:00:00.000Z`);
+}
+
 /** Kurs zamknięcia na konkretny dzień lub najbliższy wcześniejszy. */
 export function getPriceOn(instrumentId: number, date: IsoDate): number | null {
   const row = db

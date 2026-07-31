@@ -13,6 +13,15 @@ export interface ParsedRow {
   type: TransactionType;
   rawSymbol: string | null;
   instrumentName: string | null;
+  /**
+   * Konto (rachunek) podane przez źródło, jeśli je zna.
+   *
+   * Wymiar niezależny od portfela: portfel wskazuje użytkownik przy imporcie,
+   * konto przychodzi z pliku. ŚWIADOMIE POZA `hashRow()` — dopisanie konta
+   * do hasza unieważniłoby wszystkie dotychczasowe importy i wgrało je
+   * drugi raz.
+   */
+  account: string | null;
   assetClass: AssetClass;
   currency: string;
   /** Czy waluta została wywnioskowana, a nie odczytana wprost ze źródła. */

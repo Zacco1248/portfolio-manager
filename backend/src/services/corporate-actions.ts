@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gte, inArray } from 'drizzle-orm';
-import { toPrice } from '@portfolio/shared';
+import { ASSET_CLASS_CHILDREN, rollUp, toPrice } from '@portfolio/shared';
+import type { AssetClass } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { dividendEvents, instruments, reportDates } from '../db/schema.js';
@@ -77,7 +78,12 @@ export async function fetchDividendHistory(instrument: InstrumentRow): Promise<n
 
 export async function refreshDividendHistory(): Promise<string> {
   const targets = instrumentsNeedingPrices().filter(
-    (i) => i.assetClass === 'stock' || i.assetClass === 'etf',
+    // Po grupie, nie po dosłownej wartości — inaczej wykrywanie dywidend
+    // i splitów przestałoby działać w całości, bez żadnego błędu.
+    (i) => {
+      const group = rollUp(i.assetClass as AssetClass);
+      return group === 'stock' || group === 'etf';
+    },
   );
   let total = 0;
 
@@ -327,7 +333,7 @@ export function etfsMissingHoldings(): { id: number; symbol: string; name: strin
   return db
     .select()
     .from(instruments)
-    .where(and(eq(instruments.assetClass, 'etf')))
+    .where(inArray(instruments.assetClass, [...ASSET_CLASS_CHILDREN.etf]))
     .all()
     .filter((i) => !i.holdings || i.holdings.length === 0)
     .map((i) => ({ id: i.id, symbol: i.symbol, name: i.name }));

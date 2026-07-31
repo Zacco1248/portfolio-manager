@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { ASSET_CLASS_LABELS } from '@portfolio/shared';
+import { assetClassLabel } from '@portfolio/shared';
 import type { AssetClass } from '@portfolio/shared';
 import { CandlestickChart } from '@/components/CandlestickChart';
 import { RatingsCard } from '@/components/RatingsCard';
-import { Card, DataTable, ErrorBanner, Spinner } from '@/components/ui';
+import { AssetClassSelect, Card, DataTable, ErrorBanner, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
 import type { PriceMoveFacts, SavedAnalysis } from '@/lib/api';
 import { formatCost, formatDate, toneClass } from '@/lib/format';
@@ -47,7 +47,7 @@ export function InstrumentDetail() {
         <h1 className="text-lg font-semibold">{instrument.symbol}</h1>
         <span className="text-sm text-content-secondary">{instrument.name}</span>
         <span className="badge bg-surface-overlay text-content-secondary">
-          {ASSET_CLASS_LABELS[instrument.assetClass as AssetClass]}
+          {assetClassLabel(instrument.assetClass)}
         </span>
         <span className="text-2xs text-content-muted">
           {instrument.exchange ?? '—'} · {instrument.currency}
@@ -81,6 +81,8 @@ export function InstrumentDetail() {
       <PriceMoveCard instrumentId={instrumentId} />
 
       <InstrumentRatings instrumentId={instrumentId} />
+
+      <StaleDataNotice asOf={state.asOf} />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile label="RSI (14)" value={state.rsi === null ? '—' : state.rsi.toFixed(1)} tone={rsiTone(state.rsiZone)} />
@@ -507,13 +509,7 @@ function ClassificationCard({
       <div className="flex flex-wrap items-end gap-3 p-4 pt-2">
         <label className="flex-1 min-w-[10rem] text-2xs text-content-muted">
           Klasa aktywów
-          <select className="input mt-1" value={assetClass} onChange={(e) => setAssetClass(e.target.value)}>
-            {Object.entries(ASSET_CLASS_LABELS).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
+          <AssetClassSelect className="input mt-1" value={assetClass} onChange={setAssetClass} />
         </label>
         <label className="flex-1 min-w-[10rem] text-2xs text-content-muted">
           Sektor
@@ -643,4 +639,26 @@ const WINDOW_OPTIONS = [
 /** Opis okna. Jeden dzień to w praktyce zmiana z ostatniej sesji, nie doba zegarowa. */
 function windowLabel(days: number): string {
   return days === 1 ? 'Zmiana z ostatniej sesji' : `Zmiana przez ${days} dni`;
+}
+
+/**
+ * Ostrzeżenie o wskaźnikach liczonych ze starych notowań.
+ *
+ * Wskaźnik sprzed roku wygląda dokładnie tak samo jak dzisiejszy — bez daty
+ * odczytu nie da się ich odróżnić, a decyzja podjęta na takim RSI byłaby
+ * oparta na nieaktualnym obrazie rynku.
+ */
+function StaleDataNotice({ asOf }: { asOf: string | null }) {
+  if (!asOf) return null;
+
+  const ageDays = Math.floor((Date.now() - Date.parse(`${asOf}T00:00:00Z`)) / 86_400_000);
+  // Weekend plus dzień świąteczny mieści się w czterech dniach.
+  if (ageDays <= 4) return null;
+
+  return (
+    <div className="rounded-card border border-warn/40 bg-warn/10 px-3 py-2 text-2xs text-warn">
+      Wskaźniki liczone z notowań z {formatDate(asOf)} — {ageDays} dni temu. Użyj „Uzupełnij historię notowań",
+      żeby je odświeżyć.
+    </div>
+  );
 }

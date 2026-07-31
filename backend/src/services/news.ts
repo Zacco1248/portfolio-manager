@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
-import { AI_DISCLAIMER } from '@portfolio/shared';
+import { AI_DISCLAIMER, isDomesticInstrument } from '@portfolio/shared';
 import type { Importance, NewsItem, Sentiment } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
@@ -9,12 +9,12 @@ import type { InstrumentRow } from '../db/schema.js';
 import { nowIso } from '../lib/dates.js';
 import { errorMessage } from '../lib/errors.js';
 import { fetchText } from '../lib/http-client.js';
-import { looksMarketRelated, stripPublisher } from '../lib/headlines.js';
+import { looksMarketRelated, mentionsCompany, stripPublisher } from '../lib/headlines.js';
 import { parseFeed } from '../lib/rss.js';
 import type { FeedEntry } from '../lib/rss.js';
 import { createLogger } from '../lib/logger.js';
 import { analyzeNewsBatch } from './ai.js';
-import { checkFeature } from './ai-config.js';
+import { checkFeature, getAiSettings } from './ai-config.js';
 import { instrumentsNeedingPrices } from './prices.js';
 
 const log = createLogger('news');
@@ -43,11 +43,22 @@ interface FeedSource {
  * spółek z GPW bywa pusty.
  */
 function isPolish(instrument: InstrumentRow): boolean {
-  if (instrument.exchange === 'WSE' || instrument.exchange === 'GPW') return true;
   if (instrument.country === 'Polska') return true;
-  if (instrument.symbol.toUpperCase().startsWith('WSE:')) return true;
-  if (instrument.symbol.toUpperCase().endsWith('.WA')) return true;
-  return instrument.currency === 'PLN' && instrument.assetClass === 'stock';
+  return isDomesticInstrument(instrument);
+}
+
+/**
+ * Kanał zbiorczy polskiego serwisu — pobierany tylko dla krajowych papierów.
+ *
+ * Gotówka i obligacje detaliczne odpadają z tego samego powodu co przy
+ * wyszukiwarce: nie mają nazwy, którą dałoby się sensownie odnaleźć
+ * w nagłówkach, więc pobranie kanału byłoby ruchem sieciowym bez trafień.
+ */
+function polishFeed(url: string): (instrument: InstrumentRow) => string | null {
+  return (instrument) => {
+    if (instrument.assetClass === 'cash' || instrument.assetClass === 'bond') return null;
+    return isPolish(instrument) ? url : null;
+  };
 }
 
 const SOURCES: FeedSource[] = [
@@ -90,23 +101,20 @@ const SOURCES: FeedSource[] = [
   },
   // Kanały zbiorcze polskich serwisów. Filtrujemy je po nazwie spółki, więc
   // jeden pobrany kanał obsługuje wszystkie krajowe pozycje naraz.
-  {
-    id: 'bankier',
-    urlFor: (instrument) =>
-      isPolish(instrument) ? 'https://www.bankier.pl/rss/wiadomosci.xml' : null,
-  },
-  {
-    id: 'bankier-gielda',
-    urlFor: (instrument) => (isPolish(instrument) ? 'https://www.bankier.pl/rss/gielda.xml' : null),
-  },
-  {
-    id: 'pb-inwestora',
-    urlFor: (instrument) => (isPolish(instrument) ? 'https://www.pb.pl/rss/puls-inwestora.xml' : null),
-  },
-  {
-    id: 'pb-najnowsze',
-    urlFor: (instrument) => (isPolish(instrument) ? 'https://www.pb.pl/rss/najnowsze.xml' : null),
-  },
+  { id: 'bankier', urlFor: polishFeed('https://www.bankier.pl/rss/wiadomosci.xml') },
+  { id: 'bankier-gielda', urlFor: polishFeed('https://www.bankier.pl/rss/gielda.xml') },
+  { id: 'bankier-firma', urlFor: polishFeed('https://www.bankier.pl/rss/firma.xml') },
+  { id: 'pb-inwestora', urlFor: polishFeed('https://www.pb.pl/rss/puls-inwestora.xml') },
+  { id: 'pb-najnowsze', urlFor: polishFeed('https://www.pb.pl/rss/najnowsze.xml') },
+  /*
+   * Kanały dołożone po tym, jak okazało się, że dwa serwisy dają zbyt wąskie
+   * pokrycie — sprawdzone pod kątem tego, czy faktycznie oddają wpisy
+   * i czy treść da się potem odczytać w czytniku.
+   */
+  { id: 'strefa-inwestorow', urlFor: polishFeed('https://strefainwestorow.pl/rss.xml') },
+  { id: 'money-gielda', urlFor: polishFeed('https://www.money.pl/rss/gielda.xml') },
+  { id: 'interia-gieldy', urlFor: polishFeed('https://biznes.interia.pl/gieldy/feed') },
+  { id: 'business-insider', urlFor: polishFeed('https://businessinsider.com.pl/.feed') },
 ];
 
 function yahooSymbol(instrument: InstrumentRow): string | null {
@@ -180,12 +188,16 @@ export async function fetchNewsFor(targets: InstrumentRow[]): Promise<string> {
             ? entries
             : entries.filter((e) =>
                 source.id === 'google-news'
-                  ? mentionsInstrument({ ...e, title: stripPublisher(e.title), summary: null }, instrument) &&
-                    looksMarketRelated(stripPublisher(e.title))
-                  : mentionsInstrument(e, instrument),
+                  ? mentionsCompany(e.title, instrument) && looksMarketRelated(stripPublisher(e.title))
+                  : mentionsCompany(e.title, instrument),
               );
 
-        for (const entry of relevant.slice(0, 15)) {
+        // Limit tnie po dacie, nie po kolejności w kanale. Kanały zbiorcze
+        // bywają posortowane działowo, więc bez tego „15 pierwszych" potrafiło
+        // oznaczać najstarsze wpisy dnia.
+        const newest = [...relevant].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
+
+        for (const entry of newest.slice(0, 15)) {
           const result = db
             .insert(newsItems)
             .values({
@@ -210,14 +222,6 @@ export async function fetchNewsFor(targets: InstrumentRow[]): Promise<string> {
   }
 
   return `pobrano ${inserted} nowych wiadomości dla ${targets.length} instrumentów`;
-}
-
-function mentionsInstrument(entry: FeedEntry, instrument: InstrumentRow): boolean {
-  const haystack = `${entry.title} ${entry.summary ?? ''}`.toLowerCase();
-  // Pierwszy człon nazwy zwykle wystarcza ("CD Projekt SA" → "cd projekt").
-  const name = instrument.name.toLowerCase().replace(/\s+(sa|s\.a\.|spółka akcyjna|plc|inc|corp)\.?$/i, '');
-  const ticker = instrument.symbol.split(':').pop()?.toLowerCase() ?? '';
-  return (name.length > 3 && haystack.includes(name)) || (ticker.length > 2 && haystack.includes(ticker));
 }
 
 /**
@@ -259,7 +263,9 @@ export async function analyzePendingNews(): Promise<string> {
         sentiment: result.sentiment,
         importance: result.importance,
         aiSignal: result.signal,
-        aiModel: config.ai.model,
+        // Model faktycznie użyty, nie domyślny z `.env` — po zmianie dostawcy
+        // w ustawieniach historia pokazywałaby inaczej nieprawdziwy identyfikator.
+        aiModel: getAiSettings().model,
         aiAnalyzedAt: nowIso(),
       })
       .where(eq(newsItems.id, result.id))

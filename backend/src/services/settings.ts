@@ -11,10 +11,22 @@ export function getSetting<T>(key: string, fallback: T): T {
 }
 
 export function setSetting(key: string, value: unknown): void {
+  // Kolumna `value` jest NOT NULL, a i tak `null` znaczy dokładnie to samo, co
+  // brak wiersza — kasujemy więc ustawienie zamiast zapisywać pustą wartość.
+  if (value === null || value === undefined) {
+    deleteSetting(key);
+    return;
+  }
+
   db.insert(settings)
     .values({ key, value })
     .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: nowIso() } })
     .run();
+}
+
+/** Usuwa ustawienie — odczyt wróci wtedy do wartości domyślnej. */
+export function deleteSetting(key: string): void {
+  db.delete(settings).where(eq(settings.key, key)).run();
 }
 
 export function allSettings(): Record<string, unknown> {

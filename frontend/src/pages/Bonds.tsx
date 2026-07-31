@@ -1,23 +1,11 @@
 import { useState } from 'react';
-import { BOND_KINDS } from '@portfolio/shared';
+import { BOND_KINDS, bondTermsFor, defaultBondSeries } from '@portfolio/shared';
 import type { BondKind } from '@portfolio/shared';
 import { Card, DataTable, EmptyState, ErrorBanner, Field, Spinner, Toast, useToast } from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
 import { formatDate, formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
 import { useApp, usePortfolioParam } from '@/state/app';
-
-/** Domyślne parametry emisji dla najpopularniejszych serii detalicznych. */
-const KIND_DEFAULTS: Record<string, { termMonths: number; capitalization: 'annual' | 'none' }> = {
-  EDO: { termMonths: 120, capitalization: 'annual' },
-  COI: { termMonths: 48, capitalization: 'none' },
-  TOS: { termMonths: 36, capitalization: 'annual' },
-  ROR: { termMonths: 12, capitalization: 'none' },
-  DOR: { termMonths: 24, capitalization: 'none' },
-  ROS: { termMonths: 72, capitalization: 'annual' },
-  ROD: { termMonths: 144, capitalization: 'annual' },
-  OTS: { termMonths: 3, capitalization: 'none' },
-};
 
 export function Bonds() {
   const portfolioId = usePortfolioParam();
@@ -40,12 +28,18 @@ export function Bonds() {
 
   const [cpiForm, setCpiForm] = useState({ year: String(new Date().getFullYear()), month: '1', value: '' });
 
+  // Oznaczenie wynikające z rodzaju i daty zakupu — pokazujemy je jako
+  // podpowiedź, żeby nie trzeba było przepisywać go z potwierdzenia zakupu.
+  const suggestedSeries = defaultBondSeries(form.kind, form.purchaseDate);
+  // Serie użyte wcześniej: przy dokupowaniu tej samej emisji wystarczy wybrać.
+  const knownSeries = [...new Set((bonds.data ?? []).map((b) => b.series))].sort();
+
   const addBond = async () => {
     try {
-      const defaults = KIND_DEFAULTS[form.kind] ?? { termMonths: 120, capitalization: 'annual' as const };
+      const defaults = bondTermsFor(form.kind);
       await api.bonds.create({
         portfolioId: form.portfolioId,
-        series: form.series || form.kind,
+        series: form.series || defaultBondSeries(form.kind, form.purchaseDate),
         kind: form.kind,
         purchaseDate: form.purchaseDate,
         count: Number(form.count),
@@ -96,8 +90,24 @@ export function Bonds() {
               ))}
             </select>
           </Field>
-          <Field label="Seria" hint="np. EDO0536">
-            <input className="input" value={form.series} onChange={(e) => setForm({ ...form, series: e.target.value })} />
+          <Field label="Seria" hint={`Puste = ${suggestedSeries}`}>
+            {/*
+              Podpowiedź, nie wymuszenie: seria wynika z rodzaju i daty zakupu
+              wg konwencji MF, ale bywają emisje nietypowe, więc pole zostaje
+              edytowalne. `datalist` dokłada serie użyte wcześniej.
+            */}
+            <input
+              className="input"
+              list="serie-obligacji"
+              placeholder={suggestedSeries}
+              value={form.series}
+              onChange={(e) => setForm({ ...form, series: e.target.value })}
+            />
+            <datalist id="serie-obligacji">
+              {knownSeries.map((series) => (
+                <option key={series} value={series} />
+              ))}
+            </datalist>
           </Field>
           <Field label="Data zakupu">
             <input type="date" className="input" value={form.purchaseDate} onChange={(e) => setForm({ ...form, purchaseDate: e.target.value })} />
@@ -214,6 +224,8 @@ export function Bonds() {
       )}
 
       <Card title="Odczyty inflacji (GUS)">
+        <CpiCoverage entries={cpi.data ?? []} />
+
         <div className="flex flex-wrap items-end gap-2 p-4 pt-2">
           <div className="w-24">
             <Field label="Rok">
@@ -251,5 +263,40 @@ export function Bonds() {
 
       {toast && <Toast message={toast.message} tone={toast.tone} onDismiss={dismiss} />}
     </div>
+  );
+}
+
+/**
+ * Pokrycie odczytami inflacji.
+ *
+ * Bez tego użytkownik nie miał jak odróżnić „obligacja liczona z prognozy, bo
+ * brakuje danych" od „silnik liczy źle" — a to dwie zupełnie różne sprawy.
+ * Odczyty wchodzą do bazy przy imporcie arkusza z GUS albo ręcznie niżej.
+ */
+function CpiCoverage({ entries }: { entries: { year: number; month: number }[] }) {
+  if (entries.length === 0) {
+    return (
+      <p className="border-b border-surface-border px-4 pb-3 pt-2 text-2xs text-warn">
+        Brak odczytów inflacji — wszystkie okresy po pierwszym roku liczą się z samej marży. Zaimportuj arkusz
+        z danymi GUS albo dodaj odczyty ręcznie poniżej.
+      </p>
+    );
+  }
+
+  // Emitent ustala stopę na podstawie odczytu sprzed dwóch miesięcy, więc
+  // dane sięgające miesiąca X pokrywają okresy zaczynające się do X+2.
+  const sorted = [...entries].sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
+  const first = sorted[0]!;
+  const last = sorted[sorted.length - 1]!;
+  const fmt = (e: { year: number; month: number }) => `${e.year}-${String(e.month).padStart(2, '0')}`;
+
+  const coveredUntil = new Date(Date.UTC(last.year, last.month + 1, 1));
+  const covered = `${coveredUntil.getUTCFullYear()}-${String(coveredUntil.getUTCMonth() + 1).padStart(2, '0')}`;
+
+  return (
+    <p className="border-b border-surface-border px-4 pb-3 pt-2 text-2xs text-content-muted">
+      {entries.length} odczytów od {fmt(first)} do {fmt(last)}. Okresy odsetkowe zaczynające się do {covered}{' '}
+      liczone są z realnej inflacji; późniejsze — jako prognoza z ostatniej znanej wartości.
+    </p>
   );
 }
