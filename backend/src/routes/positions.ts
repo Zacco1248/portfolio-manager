@@ -62,7 +62,9 @@ positionsRouter.post(
       prices,
       message:
         problems.length === 0
-          ? `Zaktualizowano ${prices.updated} notowań, ${prices.skipped} bez danych.`
+          ? // Kursy wymieniamy wprost: to ta sama akcja co notowania, ale bez
+            // nazwania jej nie było widać, że martwy kurs NBP właśnie się odświeżył.
+            `Zaktualizowano ${prices.updated} notowań, ${prices.skipped} bez danych. Kursy NBP: ${fx}.`
           : `Częściowe odświeżenie — nie powiodło się: ${problems.join(', ')}.`,
     });
   }),

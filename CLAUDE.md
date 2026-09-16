@@ -31,6 +31,8 @@ Po zmianach w backendzie zawsze uruchamiaj testy przed commitem.
 - Raport podatkowy PIT-38: krypto rozliczane osobno od papierów wartościowych; dywidendy zagraniczne z uwzględnieniem podatku u źródła.
 - Obligacje EDO: oprocentowanie pierwszy rok stałe, kolejne lata inflacja + marża, kapitalizacja roczna. Parametry emisji przechowuj per zakup.
 - Sygnały AI dot. spółek zawsze oznaczaj w UI jako materiał informacyjny, nie doradztwo inwestycyjne.
+- Model językowy wolno wywołać z harmonogramu wyłącznie dla funkcji z `SCHEDULED_FEATURES` (dziś: streszczenia wiadomości). Każda inna funkcja startuje po kliknięciu użytkownika — `completeWithMeta` wymaga podania `origin` i blokuje resztę.
+- Awaria modelu musi dotrzeć do interfejsu z powodem (`AiUnavailable`), nigdy jako cichy brak treści. Nieudana analiza nie kasuje kolejki wiadomości.
 
 ## Architektura
 

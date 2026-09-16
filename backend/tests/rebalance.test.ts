@@ -37,7 +37,10 @@ function position(
     dayChangeBp: null,
     sharePortfolioBp: 0,
     priceStale: false,
+    priceMissing: false,
     fxRateE6: 1_000_000,
+    fxAsOf: null,
+    fxStale: false,
   };
 }
 

@@ -1,6 +1,6 @@
 import { and, desc, eq, gte } from 'drizzle-orm';
 import { shareBp } from '@portfolio/shared';
-import type { Candle } from '@portfolio/shared';
+import type { AiUnavailable, Candle } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { instruments, newsItems, pricesDaily } from '../db/schema.js';
@@ -9,10 +9,10 @@ import { addDays, today } from '../lib/dates.js';
 import { errorMessage } from '../lib/errors.js';
 import { fetchAnalystSummary } from '../providers/yahoo-summary.js';
 import { toYahooSymbol } from '../providers/yahoo.js';
-import { checkFeature } from './ai-config.js';
+import { checkFeature, getAiSettings } from './ai-config.js';
 import { toProviderInstrument } from './prices.js';
 import { createLogger } from '../lib/logger.js';
-import { completeWithMeta, estimateCostMicroUsd } from './ai.js';
+import { asUnavailable, completeWithMeta, estimateCostMicroUsd } from './ai.js';
 import { activePortfolioIds, buildPositions, toInstrumentDto } from './positions.js';
 import { ratingConsensus, fetchRecommendations } from './recommendations.js';
 import type { RatingConsensus } from './recommendations.js';
@@ -291,6 +291,8 @@ export interface FitResult {
   snapshot: ResearchSnapshot;
   text: string | null;
   unavailableReason: string | null;
+  /** Powód z rodzajem — interfejs dobiera po nim akcję, nie po treści zdania. */
+  unavailable: AiUnavailable | null;
   disclaimer: string;
   usage?: { provider: string; model: string; costMicroUsd: number | null };
 }
@@ -307,7 +309,7 @@ export async function assessFit(instrumentId: number, portfolioId?: number): Pro
 
   const availability = checkFeature('portfolioFit');
   if (!availability.enabled) {
-    return { snapshot, text: null, unavailableReason: availability.reason, disclaimer };
+    return { snapshot, text: null, unavailableReason: availability.reason, unavailable: availability.unavailable, disclaimer };
   }
 
   const { buildContext } = await import('./suggestions.js');
@@ -340,17 +342,27 @@ export async function assessFit(instrumentId: number, portfolioId?: number): Pro
   ].join('\n');
 
   try {
-    const meta = await completeWithMeta(FIT_PROMPT, payload, 1500);
+    const meta = await completeWithMeta(FIT_PROMPT, payload, {
+      feature: 'portfolioFit',
+      origin: 'user',
+      maxTokens: 1500,
+    });
+    if (!meta.text) {
+      const empty: AiUnavailable = { kind: 'empty_reply', message: 'Model odpowiedział bez treści.', retryable: true };
+      return { snapshot, text: null, unavailableReason: empty.message, unavailable: empty, disclaimer };
+    }
     return {
       snapshot,
       text: meta.text,
-      unavailableReason: meta.text ? null : 'Model nie zwrócił treści.',
+      unavailableReason: null,
+      unavailable: null,
       disclaimer,
       usage: { provider: meta.provider, model: meta.model, costMicroUsd: estimateCostMicroUsd(meta) },
     };
   } catch (err) {
-    log.warn(`Ocena dopasowania nieudana: ${errorMessage(err)}`);
-    return { snapshot, text: null, unavailableReason: 'Model nie odpowiedział.', disclaimer };
+    const failure = asUnavailable(err, getAiSettings().provider);
+    log.warn(`Ocena dopasowania nieudana: ${failure.detail ?? failure.message}`);
+    return { snapshot, text: null, unavailableReason: failure.message, unavailable: failure, disclaimer };
   }
 }
 

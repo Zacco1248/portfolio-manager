@@ -139,6 +139,59 @@ export function detectStalePrices(positions: Position[]): RiskWarning[] {
   ];
 }
 
+/**
+ * Kursy walutowe użyte do wyceny są nieaktualne.
+ *
+ * Osobno od `detectStalePrices`, bo to inna awaria i inna naprawa: cena może
+ * być z dzisiaj, a kurs sprzed dwóch miesięcy — i wtedy wycena wygląda na
+ * świeżą, choć jest przeliczona po nieaktualnym kursie. W praktyce zdarza się
+ * to wtedy, gdy aplikacja nie chodzi ciągle i zadanie `fx:refresh` nie ma
+ * kiedy się wykonać.
+ */
+export function detectStaleFx(positions: Position[]): RiskWarning[] {
+  const affected = positions.filter((p) => p.fxStale && p.valuePlnMinor > 0);
+  if (affected.length === 0) return [];
+
+  const value = affected.reduce((sum, p) => sum + p.valuePlnMinor, 0);
+  const total = positions.reduce((sum, p) => sum + p.valuePlnMinor, 0);
+  const dates = [...new Set(affected.map((p) => p.fxAsOf).filter((d): d is string => d !== null))].sort();
+
+  return [
+    {
+      kind: 'stale_fx',
+      severity: 'critical',
+      message: `Kursy walut są nieaktualne — ostatni z ${dates[0] ?? 'nieznanej daty'}.`,
+      detail:
+        `Dotyczy ${affected.length} ${affected.length === 1 ? 'pozycji' : 'pozycji'} ` +
+        `(${affected.map((p) => p.instrument.symbol).join(', ')}), ` +
+        `czyli ${fmtPct(total > 0 ? Math.round((value / total) * 10_000) : 0)} wartości portfela. ` +
+        'Odśwież kursy NBP, żeby wycena walutowa się zgadzała.',
+    },
+  ];
+}
+
+/**
+ * Pozycje bez jakiegokolwiek notowania.
+ *
+ * Ich wartość podstawia koszt nabycia, więc wchodzą do sumy portfela z wynikiem
+ * zero — co bez ostrzeżenia wygląda jak papier, który nie drgnął od zakupu.
+ */
+export function detectMissingPrices(positions: Position[]): RiskWarning[] {
+  const missing = positions.filter((p) => p.priceMissing);
+  if (missing.length === 0) return [];
+
+  return [
+    {
+      kind: 'missing_prices',
+      severity: 'warning',
+      message: `${missing.length} ${missing.length === 1 ? 'pozycja nie ma notowania' : 'pozycji nie ma notowania'}.`,
+      detail:
+        `Dotyczy: ${missing.map((p) => p.instrument.symbol).join(', ')}. ` +
+        'Wycenione po koszcie nabycia — wynik na nich jest nieznany, nie zerowy.',
+    },
+  ];
+}
+
 function fmtPct(bp: number): string {
   return `${(bp / 100).toFixed(1).replace('.', ',')}%`;
 }

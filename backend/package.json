@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate-cli.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "diagnose": "tsx src/cli/diagnose.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

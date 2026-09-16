@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { toPrice, toQty } from '@portfolio/shared';
 
@@ -229,6 +230,65 @@ describe('pozycje', () => {
   it('liczy kapitał wpłacony netto', () => {
     expect(m.positions.netInvested([mainPortfolio])).toBe(1_000_000);
     expect(m.positions.netInvested([mainPortfolio, ikePortfolio])).toBe(1_500_000);
+  });
+
+  it('oznacza pozycję walutową wycenianą nieaktualnym kursem', () => {
+    /*
+     * Fikstura ma jeden kurs USD z 2025-01-02, a testy chodzą znacznie później,
+     * więc pozycja dolarowa jest wyceniana kursem sprzed miesięcy. Wcześniej
+     * nic tego nie sygnalizowało: `priceStale` dotyczy wyłącznie notowania,
+     * więc świeża cena po martwym kursie wyglądała na poprawną wycenę.
+     */
+    const iuit = m.positions
+      .buildPositions([mainPortfolio])
+      .positions.find((p) => p.instrument.id === iuitId);
+
+    if (iuit) {
+      expect(iuit.fxAsOf).toBe('2025-01-02');
+      expect(iuit.fxStale).toBe(true);
+    }
+
+    // Pozycja złotowa nie przechodzi przez żaden kurs, więc nigdy nie jest stara.
+    const cdr = m.positions.buildPositions([mainPortfolio]).positions.find((p) => p.instrument.id === cdrId)!;
+    expect(cdr.fxAsOf).toBeNull();
+    expect(cdr.fxStale).toBe(false);
+  });
+
+  it('pozycja bez notowania nie udaje zerowego wyniku', () => {
+    const instrumentId = m.db
+      .insert(m.schema.instruments)
+      .values({ symbol: 'WSE:BEZCENY', name: 'Bez notowania', assetClass: 'stock_pl', currency: 'PLN' })
+      .returning()
+      .get().id;
+
+    m.db
+      .insert(m.schema.transactions)
+      .values({
+        portfolioId: mainPortfolio,
+        instrumentId,
+        type: 'buy',
+        tradeDate: '2025-01-04',
+        currency: 'PLN',
+        qtyE8: toQty('4'),
+        priceE8: toPrice('50'),
+        grossMinor: 20_000,
+        amountPlnMinor: -20_000,
+        taxAmountPlnMinor: -20_000,
+      })
+      .run();
+
+    const position = m.positions
+      .buildPositions([mainPortfolio])
+      .positions.find((p) => p.instrument.id === instrumentId)!;
+
+    // Wartość zostaje na koszcie, żeby pozycja nie wypadła z sumy portfela…
+    expect(position.priceMissing).toBe(true);
+    expect(position.valuePlnMinor).toBe(20_000);
+    // …ale zmiana procentowa jest nieznana, a nie zerowa.
+    expect(position.unrealizedBp).toBeNull();
+
+    m.db.delete(m.schema.transactions).where(eq(m.schema.transactions.instrumentId, instrumentId)).run();
+    m.db.delete(m.schema.instruments).where(eq(m.schema.instruments.id, instrumentId)).run();
   });
 });
 

@@ -1,12 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { AI_DISCLAIMER } from '@portfolio/shared';
-import type { Importance, Sentiment } from '@portfolio/shared';
+import type { AiUnavailable, Importance, Sentiment } from '@portfolio/shared';
 import { config } from '../config.js';
 import { errorMessage } from '../lib/errors.js';
 import { fetchJson } from '../lib/http-client.js';
 import { createLogger } from '../lib/logger.js';
-import type { AiProvider } from './ai-config.js';
-import { apiKeyFor, checkFeature, getAiSettings, onApiKeyChange } from './ai-config.js';
+import type { AiCallOrigin, AiFeature, AiProvider } from './ai-config.js';
+import { apiKeyFor, checkFeature, getAiSettings, onApiKeyChange, SCHEDULED_FEATURES } from './ai-config.js';
+import { budgetExceeded, recordCall } from './ai-usage.js';
+import type { AiCallFeature } from './ai-usage.js';
 
 const log = createLogger('ai');
 
@@ -59,8 +61,36 @@ onApiKeyChange(() => {
 /** Zapas tokenów na rozumowanie modeli myślących u OpenAI. */
 const REASONING_HEADROOM = 3000;
 
-export async function complete(system: string, user: string, maxTokens = 4096): Promise<string | null> {
-  return (await completeWithMeta(system, user, maxTokens)).text;
+/**
+ * Kto i po co woła model.
+ *
+ * Parametr jest obowiązkowy, bo od niego zależą dwie rzeczy, o których łatwo
+ * zapomnieć: czy wolno wydać tokeny bez udziału użytkownika i na czyje konto
+ * zapisać koszt. Wymuszenie go w sygnaturze sprawia, że dołożenie modelu do
+ * nowego zadania cyklicznego nie skompiluje się bez podjęcia decyzji.
+ */
+export interface AiCall {
+  feature: AiCallFeature;
+  origin: AiCallOrigin;
+  maxTokens?: number;
+}
+
+/**
+ * Model nie mógł zostać wywołany z powodu konfiguracji albo limitu.
+ *
+ * Osobny typ błędu, bo to nie jest awaria dostawcy: wcześniej brak klucza
+ * kończył się cichym zwrotem pustej odpowiedzi, nie do odróżnienia od modelu,
+ * który odpowiedział pustką.
+ */
+export class AiCallBlocked extends Error {
+  constructor(readonly unavailable: AiUnavailable) {
+    super(unavailable.message);
+    this.name = 'AiCallBlocked';
+  }
+}
+
+export async function complete(system: string, user: string, call: AiCall): Promise<string | null> {
+  return (await completeWithMeta(system, user, call)).text;
 }
 
 export interface CompletionMeta {
@@ -79,21 +109,98 @@ export interface CompletionMeta {
   model: string;
 }
 
-export async function completeWithMeta(system: string, user: string, maxTokens = 4096): Promise<CompletionMeta> {
+export async function completeWithMeta(system: string, user: string, call: AiCall): Promise<CompletionMeta> {
   const settings = getAiSettings();
-  const empty: CompletionMeta = {
-    text: null,
-    finishReason: null,
-    reasoningTokens: null,
-    inputTokens: null,
-    outputTokens: null,
-    provider: settings.provider,
-    model: settings.model,
+  const maxTokens = call.maxTokens ?? 4096;
+  const started = Date.now();
+
+  const blocked = (unavailable: AiUnavailable): never => {
+    recordCall({
+      feature: call.feature,
+      origin: call.origin,
+      provider: settings.provider,
+      model: settings.model,
+      status: 'blocked',
+      failure: unavailable,
+    });
+    throw new AiCallBlocked(unavailable);
   };
 
+  /*
+   * Reguła wydatku. Harmonogram może sięgnąć po model wyłącznie dla funkcji
+   * z `SCHEDULED_FEATURES` — reszta czeka na kliknięcie. Sprawdzenie jest tutaj,
+   * a nie w zadaniach, żeby dało się je ominąć tylko świadomie.
+   */
+  if (call.origin === 'schedule' && !SCHEDULED_FEATURES.includes(call.feature as AiFeature)) {
+    log.warn(`${call.feature}: wywołanie z harmonogramu zablokowane — ta funkcja działa tylko na żądanie`);
+    blocked({
+      kind: 'schedule_blocked',
+      message: 'Ta funkcja nie wywołuje modelu samoczynnie — uruchom ją przyciskiem.',
+      retryable: false,
+    });
+  }
+
+  const overBudget = budgetExceeded();
+  if (overBudget) blocked(overBudget);
+
+  const key = apiKeyFor(settings.provider);
+  if (!key) {
+    const label = settings.provider === 'openai' ? 'OpenAI' : 'Anthropic';
+    blocked({
+      kind: 'no_key',
+      message: `Brak klucza ${label} — wpisz go w Ustawieniach, w karcie „Funkcje AI".`,
+      retryable: false,
+    });
+  }
+
+  /** Jedno miejsce zapisu udanego wywołania — obie ścieżki dostawców kończą tutaj. */
+  const finish = (meta: CompletionMeta): CompletionMeta => {
+    recordCall({
+      feature: call.feature,
+      origin: call.origin,
+      provider: meta.provider,
+      model: meta.model,
+      status: 'ok',
+      inputTokens: meta.inputTokens,
+      outputTokens: meta.outputTokens,
+      costMicroUsd: estimateCostMicroUsd(meta),
+      durationMs: Date.now() - started,
+    });
+    return meta;
+  };
+
+  try {
+    return finish(await callProvider(system, user, maxTokens, settings));
+  } catch (err) {
+    const raw = errorMessage(err);
+    const failure: AiUnavailable = {
+      kind: 'provider_error',
+      message: explainAiError(raw, settings.provider),
+      detail: raw,
+      retryable: true,
+    };
+    recordCall({
+      feature: call.feature,
+      origin: call.origin,
+      provider: settings.provider,
+      model: settings.model,
+      status: 'error',
+      failure,
+      durationMs: Date.now() - started,
+    });
+    throw new AiCallBlocked(failure);
+  }
+}
+
+/** Samo wywołanie dostawcy, bez zgód, limitów i rejestru. */
+async function callProvider(
+  system: string,
+  user: string,
+  maxTokens: number,
+  settings: { provider: AiProvider; model: string },
+): Promise<CompletionMeta> {
   if (settings.provider === 'openai') {
-    const key = apiKeyFor('openai');
-    if (!key) return empty;
+    const key = apiKeyFor('openai')!;
 
     const response = await fetchJson<{
       choices?: { message?: { content?: string }; finish_reason?: string }[];
@@ -135,8 +242,7 @@ export async function completeWithMeta(system: string, user: string, maxTokens =
     };
   }
 
-  const anthropic = getAnthropic();
-  if (!anthropic) return empty;
+  const anthropic = getAnthropic()!;
 
   const response = await anthropic.messages.create({
     model: settings.model,
@@ -237,8 +343,26 @@ interface RawAnalysis {
  * z liczbą tokenów, a jedno zapytanie na kilkanaście newsów jest wyraźnie
  * tańsze niż kilkanaście osobnych.
  */
-export async function analyzeNewsBatch(items: NewsForAnalysis[]): Promise<NewsAnalysis[]> {
-  if (!checkFeature('news').enabled || items.length === 0) return [];
+export interface NewsBatchResult {
+  analyses: NewsAnalysis[];
+  /**
+   * Powód niepowodzenia albo `null`, gdy model odpowiedział.
+   *
+   * Rozróżnienie jest konieczne: pusta lista analiz przy sprawnym modelu
+   * znaczy „nie miał nic do powiedzenia o tych wiadomościach", a pusta lista
+   * po awarii znaczy „spróbuj jeszcze raz". Wcześniej oba przypadki wyglądały
+   * tak samo i kolejka wiadomości była kasowana także w tym drugim.
+   */
+  failure: AiUnavailable | null;
+}
+
+export async function analyzeNewsBatch(
+  items: NewsForAnalysis[],
+  origin: AiCallOrigin = 'user',
+): Promise<NewsBatchResult> {
+  const availability = checkFeature('news');
+  if (!availability.enabled) return { analyses: [], failure: availability.unavailable };
+  if (items.length === 0) return { analyses: [], failure: null };
 
   const payload = items.map((item) => ({
     id: item.id,
@@ -254,15 +378,38 @@ Wiadomości:
 ${JSON.stringify(payload, null, 1)}`;
 
   try {
-    const text = await complete(SYSTEM_PROMPT, userMessage);
-    if (!text) return [];
-    return parseAnalysisResponse(text, items);
+    const text = await complete(SYSTEM_PROMPT, userMessage, { feature: 'news', origin });
+    if (!text) {
+      return {
+        analyses: [],
+        failure: {
+          kind: 'empty_reply',
+          message: 'Dostawca odpowiedział bez treści. Sprawdź, czy wybrany model jest dostępny dla Twojego klucza.',
+          retryable: true,
+        },
+      };
+    }
+    return { analyses: parseAnalysisResponse(text, items), failure: null };
   } catch (err) {
-    // Awaria API nie może zatrzymać crona ani zepsuć widoku newsów —
-    // wiadomości zostają bez analizy i zostaną spróbowane ponownie.
-    log.warn(`Analiza AI nieudana: ${errorMessage(err)}`);
-    return [];
+    // Awaria API nie może zatrzymać crona ani zepsuć widoku newsów, ale musi
+    // być widoczna — inaczej wiadomości znikają z kolejki bez streszczenia,
+    // a jedynym śladem zostaje linia w logu.
+    const failure = asUnavailable(err, getAiSettings().provider);
+    log.warn(`Analiza AI nieudana: ${failure.detail ?? failure.message}`);
+    return { analyses: [], failure };
   }
+}
+
+/**
+ * Zamiana dowolnego wyjątku na powód do pokazania.
+ *
+ * `AiCallBlocked` niesie już gotowy opis, reszta przechodzi przez
+ * `explainAiError`, który zna typowe odpowiedzi dostawców.
+ */
+export function asUnavailable(err: unknown, provider: AiProvider): AiUnavailable {
+  if (err instanceof AiCallBlocked) return err.unavailable;
+  const raw = errorMessage(err);
+  return { kind: 'provider_error', message: explainAiError(raw, provider), detail: raw, retryable: true };
 }
 
 /** Wyciąga JSON z odpowiedzi, tolerując opakowanie w blok kodu. */
@@ -392,8 +539,14 @@ export interface NarrativeInput {
  * Komentarz do podsumowania. Do modelu trafiają wyłącznie zagregowane kwoty —
  * bez listy transakcji, nazw instrumentów i historii.
  */
-export async function generateNarrative(input: NarrativeInput): Promise<string | null> {
-  if (!checkFeature('insights').enabled) return null;
+export interface NarrativeResult {
+  text: string | null;
+  unavailable: AiUnavailable | null;
+}
+
+export async function generateNarrative(input: NarrativeInput): Promise<NarrativeResult> {
+  const availability = checkFeature('insights');
+  if (!availability.enabled) return { text: null, unavailable: availability.unavailable };
 
   const zl = (minor: number): string => (minor / 100).toFixed(2);
   const percent = (bp: number | null): string => (bp === null ? 'brak danych' : `${(bp / 100).toFixed(1)}%`);
@@ -442,10 +595,21 @@ export async function generateNarrative(input: NarrativeInput): Promise<string |
   const payload = sections.join('\n');
 
   try {
-    return await complete(NARRATIVE_PROMPT, payload, 900);
+    const text = await complete(NARRATIVE_PROMPT, payload, {
+      feature: 'insights',
+      origin: 'user',
+      maxTokens: 900,
+    });
+    return {
+      text,
+      unavailable: text
+        ? null
+        : { kind: 'empty_reply', message: 'Model odpowiedział bez treści.', retryable: true },
+    };
   } catch (err) {
-    log.warn(`Komentarz AI nieudany: ${errorMessage(err)}`);
-    return null;
+    const failure = asUnavailable(err, getAiSettings().provider);
+    log.warn(`Komentarz AI nieudany: ${failure.detail ?? failure.message}`);
+    return { text: null, unavailable: failure };
   }
 }
 
@@ -500,7 +664,9 @@ export async function testAiConnection(): Promise<AiConnectionTest> {
     const result = await completeWithMeta(
       'Odpowiadasz jednym słowem, bez interpunkcji i bez wyjaśnień.',
       'Napisz: dziala',
-      TEST_TOKEN_BUDGET,
+      // Test jest jawnym działaniem użytkownika w ustawieniach i celowo omija
+      // przełączniki funkcji — ale nie omija limitu kosztów ani rejestru.
+      { feature: 'connectionTest', origin: 'user', maxTokens: TEST_TOKEN_BUDGET },
     );
     const latencyMs = Date.now() - started;
     const reply = result.text;
@@ -533,7 +699,7 @@ export async function testAiConnection(): Promise<AiConnectionTest> {
       ok: false,
       latencyMs: Date.now() - started,
       reply: null,
-      message: explainAiError(errorMessage(err), settings.provider),
+      message: asUnavailable(err, settings.provider).message,
     };
   }
 }

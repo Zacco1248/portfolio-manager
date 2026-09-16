@@ -5,8 +5,8 @@ import { assetClassLabel } from '@portfolio/shared';
 import type { AssetClass, TechnicalResponse } from '@portfolio/shared';
 import { CandlestickChart } from '@/components/CandlestickChart';
 import { RatingsCard } from '@/components/RatingsCard';
-import { AssetClassSelect, Card, DataTable, ErrorBanner, InfoHint, Spinner } from '@/components/ui';
-import { api } from '@/lib/api';
+import { AiUnavailableNotice, AssetClassSelect, Card, DataTable, ErrorBanner, InfoHint, Spinner } from '@/components/ui';
+import { ApiError, api } from '@/lib/api';
 import type { PriceMoveFacts, SavedAnalysis } from '@/lib/api';
 import { formatCost, formatDate, formatPercent, formatPln, formatQuantity, relativeTime, toneClass } from '@/lib/format';
 import { TransactionForm } from '@/components/TransactionForm';
@@ -305,7 +305,9 @@ function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
   const [state, setState] = useState<{
     busy: boolean;
     result: Awaited<ReturnType<typeof api.assist.priceMove>> | null;
-  }>({ busy: false, result: null });
+    /** Awaria transportu — inna sprawa niż model, który odpowiedział odmową. */
+    error: string | null;
+  }>({ busy: false, result: null, error: null });
   const [days, setDays] = useState<number>(14);
 
   const history = useAsync(
@@ -314,13 +316,19 @@ function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
   );
 
   const run = async () => {
-    setState({ busy: true, result: null });
+    setState({ busy: true, result: null, error: null });
     try {
       const result = await api.assist.priceMove(instrumentId, days);
-      setState({ busy: false, result });
+      setState({ busy: false, result, error: null });
       history.reload();
-    } catch {
-      setState({ busy: false, result: null });
+    } catch (err) {
+      // Wcześniej ten catch był pusty i karta wracała do stanu wyjściowego —
+      // nieodróżnialnie od sytuacji, w której nikt nic nie kliknął.
+      setState({
+        busy: false,
+        result: null,
+        error: err instanceof ApiError ? err.message : 'Nie udało się pobrać analizy.',
+      });
     }
   };
 
@@ -351,7 +359,13 @@ function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
         </div>
       }
     >
-      {!state.result && (
+      {state.error && (
+        <div className="px-4 pb-3 pt-2">
+          <ErrorBanner message={state.error} onRetry={() => void run()} />
+        </div>
+      )}
+
+      {!state.result && !state.error && (
         <p className="px-4 pb-3 pt-2 text-2xs text-content-muted">
           Zestawia zmianę kursu z wybranego okresu z wiadomościami z tego samego czasu.
           Wymaga włączonej funkcji „Wyjaśnianie ruchów cen" w Ustawieniach. Każde sprawdzenie zostaje
@@ -397,6 +411,10 @@ function PriceMoveCard({ instrumentId }: { instrumentId: number }) {
             <p className="whitespace-pre-wrap border-t border-surface-border px-4 py-3 text-sm leading-relaxed text-content-secondary">
               {state.result.text}
             </p>
+          ) : state.result.unavailable ? (
+            <div className="border-t border-surface-border">
+              <AiUnavailableNotice reason={state.result.unavailable} onRetry={() => void run()} />
+            </div>
           ) : (
             <p className="border-t border-surface-border px-4 py-3 text-2xs text-content-muted">
               {state.result.unavailableReason ?? 'Brak komentarza.'}

@@ -41,7 +41,12 @@ export function News() {
     try {
       const result = await api.news.refresh();
       news.reload();
-      show(`${result.fetched}; ${result.analyzed}`, 'success');
+      /*
+       * Nieudana analiza nie może kończyć się zielonym komunikatem sukcesu
+       * z treścią „model nie zwrócił analiz" — dokładnie tak wyglądało to
+       * wcześniej, niezależnie od tego, czy dostawca odrzucił klucz.
+       */
+      show(`${result.fetched}; ${result.analyzed}`, result.ok ? 'success' : 'error');
     } catch {
       show('Nie udało się pobrać wiadomości', 'error');
     } finally {
@@ -79,7 +84,7 @@ export function News() {
         }
       >
         <div className="flex flex-wrap items-end gap-2 p-4 pt-2">
-          <div className="w-64">
+          <div className="w-full sm:w-64">
             <Field label="Dodaj instrument">
               <select className="input" value={watchPick} onChange={(e) => setWatchPick(e.target.value)}>
                 <option value="">— wybierz —</option>

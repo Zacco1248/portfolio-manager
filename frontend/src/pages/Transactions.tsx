@@ -42,7 +42,7 @@ export function Transactions() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-2xs text-content-muted">
           Kwota w PLN to faktyczny przepływ gotówki. Podstawa podatkowa liczona jest osobno, po kursie NBP z dnia
           poprzedzającego transakcję.

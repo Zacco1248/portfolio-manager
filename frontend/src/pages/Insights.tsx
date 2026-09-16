@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link } from 'react-router-dom';
-import { AiDisclaimer, AiPending, Card, ErrorBanner, Spinner } from '@/components/ui';
+import { AiDisclaimer, AiPending, AiUnavailableNotice, Card, ErrorBanner, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync, useOnDemand } from '@/lib/useAsync';
@@ -86,10 +86,21 @@ export function Insights() {
           </>
         )}
 
+        {/*
+          Powód bierzemy z odpowiedzi serwera. Wcześniej stało tu zdanie
+          o wyłączonej funkcji, które pokazywało się także po odrzuceniu klucza
+          i po przekroczeniu limitu u dostawcy — czyli kierowało w złe miejsce.
+        */}
         {narrative.started && !narrative.loading && !narrative.error && !narrative.data?.narrative && (
-          <p className="px-4 pb-4 pt-2 text-2xs text-content-muted">
-            Komentarz jest niedostępny — funkcja „Komentarz do podsumowania" bywa wyłączona w Ustawieniach.
-          </p>
+          narrative.data?.unavailable ? (
+            <AiUnavailableNotice
+              reason={narrative.data.unavailable}
+              onRetry={narrative.run}
+              note="Liczby poniżej powstają lokalnie i nie zależą od modelu."
+            />
+          ) : (
+            <p className="px-4 pb-4 pt-2 text-2xs text-content-muted">Model nie zwrócił komentarza.</p>
+          )
         )}
       </Card>
 

@@ -130,7 +130,13 @@ export function MappingWizard({
 
       {inspect.sampleRows.length > 0 && (
         <div className="overflow-x-auto rounded-card border border-surface-border">
-          <table className="w-full text-2xs">
+          {/*
+            Klasa `data-table` włącza tryb kartowy poniżej 640 px (index.css),
+            a `data-label` na komórkach daje im nagłówki. Bez tego podgląd pliku
+            na telefonie przewijał się w bok, a nazwy kolumn zostawały poza
+            ekranem — czyli dokładnie to, co trzeba widzieć przy mapowaniu.
+          */}
+          <table className="data-table w-full text-2xs">
             <thead className="bg-surface-overlay text-content-muted">
               <tr>
                 {inspect.headers.map((header) => (
@@ -146,8 +152,12 @@ export function MappingWizard({
             <tbody className="divide-y divide-surface-border">
               {inspect.sampleRows.map((row, index) => (
                 <tr key={index}>
-                  {inspect.headers.map((_, column) => (
-                    <td key={column} className="whitespace-nowrap px-2 py-1 text-content-secondary">
+                  {inspect.headers.map((header, column) => (
+                    <td
+                      key={column}
+                      data-label={header}
+                      className="whitespace-nowrap px-2 py-1 text-content-secondary"
+                    >
                       {row[column] ?? ''}
                     </td>
                   ))}

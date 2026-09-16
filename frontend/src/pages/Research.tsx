@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { RatingsCard } from '@/components/RatingsCard';
-import { AiDisclaimer, AiPending, Card, ErrorBanner, Field, InfoHint, Spinner } from '@/components/ui';
+import { AiDisclaimer, AiPending, AiUnavailableNotice, Card, ErrorBanner, Field, InfoHint, Spinner } from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
 import type { ResearchSnapshot } from '@/lib/api';
 import { formatCost, formatDate, formatPercent, formatPln, toneClass } from '@/lib/format';
@@ -152,10 +152,12 @@ function ResearchCard({ instrumentId, portfolioId }: { instrumentId: number; por
   // Pierwsze wejście na kartę potrafi trwać: dociąga historię notowań
   // i rekomendacje, jeśli ich jeszcze nie ma.
   const research = useAsync(() => api.assist.research(instrumentId, portfolioId), [instrumentId, portfolioId]);
-  const [fit, setFit] = useState<{ busy: boolean; result: Awaited<ReturnType<typeof api.assist.fit>> | null }>({
-    busy: false,
-    result: null,
-  });
+  const [fit, setFit] = useState<{
+    busy: boolean;
+    result: Awaited<ReturnType<typeof api.assist.fit>> | null;
+    /** Awaria transportu — inna sprawa niż model, który odpowiedział odmową. */
+    error: string | null;
+  }>({ busy: false, result: null, error: null });
 
   if (research.loading) return <Spinner label="Zbieram dane o spółce…" />;
   if (research.error) return <ErrorBanner message={research.error} onRetry={research.reload} />;
@@ -165,11 +167,19 @@ function ResearchCard({ instrumentId, portfolioId }: { instrumentId: number; por
   const { instrument, technical, ratings } = snapshot;
 
   const runFit = () => {
-    setFit({ busy: true, result: null });
+    setFit({ busy: true, result: null, error: null });
     void api.assist
       .fit(instrumentId, portfolioId)
-      .then((result) => setFit({ busy: false, result }))
-      .catch(() => setFit({ busy: false, result: null }));
+      .then((result) => setFit({ busy: false, result, error: null }))
+      // Pusty catch zostawiał kartę w stanie sprzed kliknięcia i wyglądało to
+      // na przycisk, który nic nie robi.
+      .catch((err) =>
+        setFit({
+          busy: false,
+          result: null,
+          error: err instanceof ApiError ? err.message : 'Nie udało się pobrać oceny.',
+        }),
+      );
   };
 
   return (
@@ -320,7 +330,13 @@ function ResearchCard({ instrumentId, portfolioId }: { instrumentId: number; por
       >
         {fit.busy && <AiPending lines={5} label="Model zestawia walor z Twoim portfelem…" />}
 
-        {!fit.busy && !fit.result && (
+        {fit.error && (
+          <div className="px-4 pb-3 pt-2">
+            <ErrorBanner message={fit.error} onRetry={runFit} />
+          </div>
+        )}
+
+        {!fit.busy && !fit.result && !fit.error && (
           <p className="px-4 pb-4 pt-2 text-2xs text-content-muted">
             Zestawia dane tego waloru ze strukturą Twojego portfela: co poprawia, gdzie zwiększa koncentrację,
             czego w tych danych brakuje. Wymaga włączonej funkcji „Dopasowanie do portfela" w Ustawieniach.
@@ -334,6 +350,8 @@ function ResearchCard({ instrumentId, portfolioId }: { instrumentId: number; por
               <p className="whitespace-pre-wrap px-4 py-3 text-sm leading-relaxed text-content-secondary">
                 {fit.result.text}
               </p>
+            ) : fit.result.unavailable ? (
+              <AiUnavailableNotice reason={fit.result.unavailable} onRetry={runFit} />
             ) : (
               <p className="px-4 py-3 text-2xs text-content-muted">
                 {fit.result.unavailableReason ?? 'Brak oceny.'}

@@ -477,6 +477,18 @@ export const newsItems = sqliteTable(
     aiSignal: text('ai_signal', { mode: 'json' }).$type<{ hold: string[]; reduce: string[]; rationale: string }>(),
     aiModel: text('ai_model'),
     aiAnalyzedAt: text('ai_analyzed_at'),
+    /**
+     * Ile razy próbowaliśmy uzyskać analizę tej wiadomości.
+     *
+     * Awaria dostawcy nie może kasować kolejki: wcześniej każda nieudana
+     * paczka i tak stemplowała `ai_analyzed_at`, więc jeden błąd 429 trwale
+     * pozbawiał streszczenia dwadzieścia pięć wiadomości. Teraz stempel
+     * stawiamy dopiero wtedy, gdy model odpowiedział i mimo to pominął tę
+     * pozycję — a i wtedy dopiero po kilku podejściach.
+     */
+    aiAttempts: integer('ai_attempts').notNull().default(0),
+    /** Dlaczego wiadomość została odpuszczona po wyczerpaniu prób. */
+    aiError: text('ai_error'),
     fetchedAt: text('fetched_at').notNull().default(now),
   },
   (t) => [
@@ -717,6 +729,39 @@ export const aiAnalyses = sqliteTable(
     index('ai_analyses_kind_idx').on(t.kind, t.createdAt),
     index('ai_analyses_instrument_idx').on(t.instrumentId, t.createdAt),
   ],
+);
+
+/**
+ * Rejestr wywołań modelu — każde podejście, także nieudane.
+ *
+ * Osobno od `ai_analyses`, bo tamta tabela jest widoczną dla użytkownika
+ * historią odpowiedzi i nie powinna puchnąć od setek partii wiadomości ani
+ * od porażek, których nie ma jak wyświetlić. Tutaj chodzi o dwie inne rzeczy:
+ * ile to kosztuje i dlaczego przestało działać. Bez tego jedynym śladem po
+ * awarii dostawcy była linia `warn` na standardowym wyjściu.
+ */
+export const aiCalls = sqliteTable(
+  'ai_calls',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    createdAt: text('created_at').notNull().default(now),
+    /** Klucz funkcji z AI_FEATURES — po nim liczymy koszt per funkcja. */
+    feature: text('feature').notNull(),
+    /** 'user' albo 'schedule'. Automat wolno wyłącznie streszczeniom wiadomości. */
+    origin: text('origin').notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    /** 'ok' — model odpowiedział, 'error' — dostawca odmówił, 'blocked' — nie wysłaliśmy zapytania. */
+    status: text('status').notNull(),
+    /** Rodzaj niedostępności zgodny z AiUnavailableKind. */
+    errorKind: text('error_kind'),
+    errorMessage: text('error_message'),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    costMicroUsd: integer('cost_micro_usd'),
+    durationMs: integer('duration_ms'),
+  },
+  (t) => [index('ai_calls_created_idx').on(t.createdAt), index('ai_calls_feature_idx').on(t.feature, t.createdAt)],
 );
 
 /**

@@ -42,8 +42,19 @@ export function registerDataJobs(schedule: ScheduleFn): void {
      * kolejka nie rosła — a jednocześnie nie przepuszczają przez model całej
      * historii naraz po dłuższej przerwie w działaniu aplikacji.
      */
-    const analyzed = await analyzePendingNews({ maxBatches: 2 });
-    return `${fetched}; ${market}; ${analyzed}`;
+    const analysis = await analyzePendingNews({ maxBatches: 2, origin: 'schedule' });
+
+    /*
+     * Awaria dostawcy musi wyjść z zadania jako wyjątek, żeby `runJob` zapisał
+     * `status: 'error'`. Wcześniej połknięty błąd dawał wpis „ok" z treścią
+     * „model nie zwrócił analiz" i nic w interfejsie nie wskazywało, że klucz
+     * jest odrzucany od tygodnia.
+     */
+    if (analysis.failure) {
+      throw new Error(`${fetched}; ${market}; ${analysis.message}`);
+    }
+
+    return `${fetched}; ${market}; ${analysis.message}`;
   });
 
   // Alerty sprawdzamy częściej niż newsy, ale rzadziej niż ceny.
