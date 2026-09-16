@@ -71,6 +71,13 @@
       "when": 1785334907775,
       "tag": "0009_rating_target_currency",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1787645048608,
+      "tag": "0010_ai_call_log",
+      "breakpoints": true
     }
   ]
 }

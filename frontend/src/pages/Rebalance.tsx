@@ -7,6 +7,7 @@ import {
   AssetClassSelect,
   Card,
   DataTable,
+  AiUnavailableNotice,
   ErrorBanner,
   Field,
   Spinner,
@@ -43,7 +44,7 @@ export function Rebalance() {
     <div className="space-y-4">
       <Card title="Parametry">
         <div className="flex flex-wrap items-end gap-3 p-4 pt-2">
-          <div className="w-40">
+          <div className="w-full sm:w-40">
             <Field label="Planowana dopłata">
               <input
                 className="input"
@@ -53,7 +54,7 @@ export function Rebalance() {
               />
             </Field>
           </div>
-          <div className="w-48">
+          <div className="w-full sm:w-48">
             <Field label="Wymiar">
               <select className="input" value={dimension} onChange={(e) => setDimension(e.target.value as AllocationDimension)}>
                 {Object.entries(ALLOCATION_DIMENSION_LABELS).map(([key, label]) => (
@@ -156,11 +157,18 @@ export function Rebalance() {
                 <AiDisclaimer text={suggestions.data?.disclaimer ?? ''} />
               </div>
             </>
+          ) : suggestions.data?.unavailable ? (
+            <div className="border-t border-surface-border">
+              <AiUnavailableNotice
+                reason={suggestions.data.unavailable}
+                onRetry={suggestions.run}
+                note="Plan powyżej powstaje lokalnie i nie zależy od modelu."
+              />
+            </div>
           ) : (
             <p className="border-t border-surface-border px-4 py-3 text-2xs text-content-muted">
-              {suggestions.data?.unavailableReason ?? 'Brak propozycji.'}{' '}
-              Konkretne kierunki dokupienia podpowiada model językowy — włączysz go w Ustawieniach,
-              funkcja „Wskazówki do rebalansu". Liczby powyżej powstają lokalnie i nie zależą od AI.
+              {suggestions.data?.unavailableReason ?? 'Brak propozycji.'} Liczby powyżej powstają lokalnie
+              i nie zależą od AI.
             </p>
           )}
         </Card>
@@ -279,19 +287,19 @@ function TargetsEditor({
       }
     >
       <div className="flex flex-wrap items-end gap-2 p-4 pt-2">
-        <div className="w-40">
+        <div className="w-full sm:w-40">
           <Field label="Klasa aktywów">
             {/* Cel wolno ustawić na grupie („60% akcji") albo na liściu
                 („35% akcji polskich") — wartość grupy sumuje dzieci. */}
             <AssetClassSelect value={key} onChange={setKey} allowGroups />
           </Field>
         </div>
-        <div className="w-28">
+        <div className="w-full sm:w-28">
           <Field label="Cel %">
             <input className="input" value={target} onChange={(e) => setTarget(e.target.value)} placeholder="60" />
           </Field>
         </div>
-        <div className="w-28">
+        <div className="w-full sm:w-28">
           <Field label="Tolerancja %">
             <input className="input" value={tolerance} onChange={(e) => setTolerance(e.target.value)} />
           </Field>

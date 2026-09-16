@@ -126,13 +126,26 @@ export interface Position {
   costPlnMinor: number;
   priceE8: number | null;
   valuePlnMinor: number;
+  /**
+   * Wynik na otwartej pozycji.
+   *
+   * Przy `priceMissing` wynosi zero, bo wartość podstawia wtedy koszt nabycia —
+   * i właśnie dlatego interfejs ma pokazywać „—", a nie to zero. Suma portfela
+   * potrzebuje liczby, człowiek patrzący na wiersz potrzebuje prawdy.
+   */
   unrealizedPlnMinor: number;
   unrealizedBp: number | null;
   dayChangePlnMinor: number | null;
   dayChangeBp: number | null;
   sharePortfolioBp: number;
   priceStale: boolean;
+  /** Brak jakiegokolwiek notowania — wartość jest wtedy równa kosztowi. */
+  priceMissing: boolean;
   fxRateE6: number;
+  /** Data kursu użytego do wyceny; `null` dla pozycji złotowych. */
+  fxAsOf: string | null;
+  /** Kurs starszy niż tydzień — wycena walutowa może być myląca. */
+  fxStale: boolean;
   /**
    * Rozbicie pozycji na konta. Obecne tylko wtedy, gdy papier leży na więcej
    * niż jednym koncie albo gdy konto w ogóle jest przypisane.
@@ -233,7 +246,16 @@ export interface DashboardResponse {
 }
 
 export interface RiskWarning {
-  kind: 'concentration_instrument' | 'concentration_sector' | 'etf_overlap' | 'allocation_drift' | 'stale_prices';
+  kind:
+    | 'concentration_instrument'
+    | 'concentration_sector'
+    | 'etf_overlap'
+    | 'allocation_drift'
+    | 'stale_prices'
+    /** Kurs walutowy starszy niż tydzień — wycena pozycji walutowych jest myląca. */
+    | 'stale_fx'
+    /** Pozycja bez notowania, wyceniona po koszcie nabycia. */
+    | 'missing_prices';
   severity: 'info' | 'warning' | 'critical';
   message: string;
   detail?: string;
@@ -576,4 +598,37 @@ export interface SystemStatus {
   lastFxUpdate: string | null;
   lastSnapshot: string | null;
   providers: { id: string; healthy: boolean; lastError: string | null; lastSuccessAt: string | null }[];
+}
+
+/**
+ * Dlaczego model nie odpowiedział.
+ *
+ * Wcześniej wszystkie powody spłaszczały się do jednego zdania
+ * „Model nie odpowiedział", przez co brak klucza, wyłączona funkcja
+ * i odrzucony klucz wyglądały w interfejsie identycznie — a każdy z nich
+ * wymaga od użytkownika czegoś innego. Rodzaj rozstrzyga o tym, jaką akcję
+ * pokazać przy komunikacie.
+ */
+export type AiUnavailableKind =
+  /** Nie ma klucza dostawcy — ani w ustawieniach, ani w `.env`. */
+  | 'no_key'
+  /** Klucz jest, ale użytkownik nie włączył tej funkcji. */
+  | 'feature_off'
+  /** Miesięczny limit kosztów wyczerpany. */
+  | 'budget'
+  /** Zadanie cykliczne próbowało wywołać funkcję, której nie wolno wołać samej. */
+  | 'schedule_blocked'
+  /** Dostawca odrzucił zapytanie albo nie odpowiedział. */
+  | 'provider_error'
+  /** Dostawca odpowiedział, ale bez treści. */
+  | 'empty_reply';
+
+export interface AiUnavailable {
+  kind: AiUnavailableKind;
+  /** Zdanie do pokazania użytkownikowi, po polsku i ze wskazówką, co zrobić. */
+  message: string;
+  /** Surowy komunikat dostawcy — do rejestru i do rozwinięcia w interfejsie. */
+  detail?: string;
+  /** Czy ponowienie ma sens bez zmiany konfiguracji. */
+  retryable: boolean;
 }

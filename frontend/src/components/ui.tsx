@@ -6,7 +6,7 @@ import {
   ASSET_CLASS_GROUPS,
   ASSET_CLASS_LABELS,
 } from '@portfolio/shared';
-import type { RiskWarning } from '@portfolio/shared';
+import type { AiUnavailable, AiUnavailableKind, RiskWarning } from '@portfolio/shared';
 import { formatPercent, formatPln, toneClass } from '@/lib/format';
 
 /** Wspólne elementy interfejsu. Gęsto, bez ozdobników, kolor tylko tam gdzie niesie znaczenie. */
@@ -41,15 +41,18 @@ export function KpiTile({
   change,
   changeLabel,
   hint,
+  className = '',
 }: {
   label: string;
   value: string;
   change?: number | null;
   changeLabel?: string;
   hint?: string;
+  /** Sterowanie rozpiętością w siatce — kafel wiodący zajmuje cały wiersz. */
+  className?: string;
 }) {
   return (
-    <div className="card px-4 py-3">
+    <div className={`card px-4 py-3 ${className}`}>
       <div className="text-2xs font-medium uppercase tracking-wider text-content-muted">{label}</div>
       <div className="tabular mt-1 text-xl font-semibold">{value}</div>
       {change !== undefined && (
@@ -123,6 +126,79 @@ export function WarningList({ warnings }: { warnings: RiskWarning[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+const UNAVAILABLE_STYLE: Record<AiUnavailableKind, string> = {
+  no_key: 'border-warn/40 bg-warn/10 text-warn',
+  feature_off: 'border-surface-border bg-surface-overlay text-content-secondary',
+  budget: 'border-warn/40 bg-warn/10 text-warn',
+  schedule_blocked: 'border-surface-border bg-surface-overlay text-content-secondary',
+  provider_error: 'border-loss/40 bg-loss/10 text-loss',
+  empty_reply: 'border-surface-border bg-surface-overlay text-content-secondary',
+};
+
+const UNAVAILABLE_TITLE: Record<AiUnavailableKind, string> = {
+  no_key: 'Brak klucza dostawcy',
+  feature_off: 'Funkcja jest wyłączona',
+  budget: 'Miesięczny limit wyczerpany',
+  schedule_blocked: 'Ta funkcja działa tylko na żądanie',
+  provider_error: 'Dostawca odrzucił zapytanie',
+  empty_reply: 'Model odpowiedział bez treści',
+};
+
+/**
+ * Dlaczego w tym miejscu nie ma komentarza modelu.
+ *
+ * Wcześniej brak klucza, wyłączona funkcja i odrzucony klucz renderowały się
+ * identycznie — jako szary drobny tekst „Model nie odpowiedział" — więc nie
+ * dało się z interfejsu wywnioskować, co zrobić. Każdy rodzaj dostaje własny
+ * kolor i własną akcję: gdzie brakuje zgody, jest przycisk; gdzie brakuje
+ * klucza, link do ustawień; gdzie zawiódł dostawca, ponowienie.
+ */
+export function AiUnavailableNotice({
+  reason,
+  onRetry,
+  onEnable,
+  enabling = false,
+  settingsHref = '/ustawienia?sekcja=ai',
+  note,
+}: {
+  reason: AiUnavailable;
+  onRetry?: () => void;
+  onEnable?: () => void;
+  enabling?: boolean;
+  settingsHref?: string;
+  /** Zdanie o tym, co działa mimo braku modelu — liczby zwykle działają. */
+  note?: string;
+}) {
+  const showEnable = reason.kind === 'feature_off' && onEnable;
+  const showRetry = reason.retryable && onRetry;
+
+  return (
+    <div className={`m-4 mt-2 flex flex-wrap items-center gap-3 rounded-card border px-3 py-2.5 ${UNAVAILABLE_STYLE[reason.kind]}`}>
+      <div className="min-w-0 flex-1 basis-56 text-sm">
+        <span className="block font-medium">{UNAVAILABLE_TITLE[reason.kind]}</span>
+        <span className="opacity-90">{reason.message}</span>
+        {note && <span className="mt-0.5 block text-2xs opacity-80">{note}</span>}
+      </div>
+
+      {showEnable && (
+        <button type="button" className="btn btn-primary shrink-0 text-2xs" disabled={enabling} onClick={onEnable}>
+          {enabling ? 'Włączam…' : 'Włącz'}
+        </button>
+      )}
+      {showRetry && (
+        <button type="button" className="btn shrink-0 border-current bg-transparent text-2xs text-inherit" onClick={onRetry}>
+          Spróbuj ponownie
+        </button>
+      )}
+      {!showEnable && !showRetry && (
+        <a className="btn shrink-0 border-current bg-transparent text-2xs text-inherit" href={settingsHref}>
+          Ustawienia
+        </a>
+      )}
+    </div>
   );
 }
 

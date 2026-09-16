@@ -1,4 +1,5 @@
 import type {
+  AiUnavailable,
   Candle,
   Account,
   AccountsReport,
@@ -219,7 +220,16 @@ export const api = {
   news: {
     list: (params: { instrumentId?: number; importance?: string; sentiment?: string }) =>
       get<{ items: NewsItem[]; disclaimer: string }>(`/news${query(params)}`),
-    refresh: () => post<{ ok: boolean; fetched: string; analyzed: string }>('/news/refresh'),
+    refresh: () =>
+      post<{
+        ok: boolean;
+        fetched: string;
+        analyzed: string;
+        analyzedCount: number;
+        pending: number;
+        /** Powód przerwania analizy — `null`, gdy model odpowiedział. */
+        unavailable: AiUnavailable | null;
+      }>('/news/refresh'),
     /** Treść artykułu do przeczytania bez opuszczania aplikacji. */
     content: (id: number) =>
       get<{
@@ -295,6 +305,7 @@ export const api = {
         snapshot: ResearchSnapshot;
         text: string | null;
         unavailableReason: string | null;
+        unavailable: AiUnavailable | null;
         disclaimer: string;
         usage?: { provider: string; model: string; costMicroUsd: number | null };
       }>('/assist/portfolio-fit', { instrumentId, portfolioId }),
@@ -346,7 +357,9 @@ export const api = {
       }>(`/insights${query({ portfolioId, years })}`),
     /** Komentarz modelu, dociągany osobno — potrafi trwać kilkanaście sekund. */
     narrative: (portfolioId?: number) =>
-      get<{ narrative: string | null }>(`/insights/narrative${query({ portfolioId })}`),
+      get<{ narrative: string | null; unavailable: AiUnavailable | null }>(
+        `/insights/narrative${query({ portfolioId })}`,
+      ),
   },
 
   suggestions: {
@@ -357,6 +370,7 @@ export const api = {
         context: SuggestionContext;
         suggestions: { kind: string; title: string; rationale: string }[];
         unavailableReason: string | null;
+        unavailable: AiUnavailable | null;
         disclaimer: string;
       }>(`/suggestions${query({ portfolioId })}`),
   },
@@ -397,6 +411,10 @@ export const api = {
         message: string;
         reply: string | null;
       }>('/ai/test', {}),
+    /** Rachunek za bieżący miesiąc — koszt, tokeny i ostatnie awarie. */
+    usage: () => get<AiUsageSummary>('/ai/usage'),
+    /** Zero znosi limit. Kwota w dolarach, bo tak jest pokazywana. */
+    setBudget: (monthlyUsd: number) => put<AiUsageSummary>('/ai/budget', { monthlyUsd }),
   },
 
   duplicates: {
@@ -485,6 +503,8 @@ export interface AssistResult<T> {
   data: T;
   text: string | null;
   unavailableReason: string | null;
+  /** Powód z rodzajem — interfejs dobiera po nim akcję, nie po treści zdania. */
+  unavailable: AiUnavailable | null;
   disclaimer: string;
   usage?: {
     provider: string;
@@ -653,4 +673,34 @@ export interface ResearchSnapshot {
   news: { title: string; publishedAt: string; source: string; url: string }[];
   holding: { held: boolean; shareBp: number; valuePlnMinor: number } | null;
   candles: Candle[];
+}
+
+/** Rachunek za wywołania modelu w bieżącym miesiącu. */
+export interface AiUsageSummary {
+  since: string;
+  costMicroUsd: number;
+  /** Zero oznacza brak limitu. */
+  budgetMicroUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  calls: number;
+  failed: number;
+  /** Ile poszło bez udziału użytkownika — z harmonogramu. */
+  scheduledCostMicroUsd: number;
+  byFeature: {
+    feature: string;
+    origin: 'user' | 'schedule';
+    calls: number;
+    failed: number;
+    inputTokens: number;
+    outputTokens: number;
+    costMicroUsd: number;
+  }[];
+  recentFailures: {
+    createdAt: string;
+    feature: string;
+    origin: string;
+    errorKind: string | null;
+    errorMessage: string | null;
+  }[];
 }

@@ -1,9 +1,9 @@
 import { ASSET_CLASS_GROUP_LABELS, rollUp, shareBp } from '@portfolio/shared';
-import type { AssetClass, AssetClassGroup } from '@portfolio/shared';
+import type { AiUnavailable, AssetClass, AssetClassGroup } from '@portfolio/shared';
 import { errorMessage } from '../lib/errors.js';
 import { createLogger } from '../lib/logger.js';
-import { checkFeature } from './ai-config.js';
-import { complete } from './ai.js';
+import { checkFeature, getAiSettings } from './ai-config.js';
+import { asUnavailable, complete } from './ai.js';
 import { activePortfolioIds, buildPositions } from './positions.js';
 import { buildPlan } from './rebalance.js';
 import { loadTargets } from './targets.js';
@@ -113,6 +113,8 @@ export interface SuggestionsResponse {
   suggestions: Suggestion[];
   /** Powód pustej listy — najczęściej wyłączona funkcja AI. */
   unavailableReason: string | null;
+  /** Ten sam powód z rodzajem, po którym interfejs dobiera akcję. */
+  unavailable: AiUnavailable | null;
   disclaimer: string;
 }
 
@@ -148,7 +150,13 @@ export async function buildSuggestions(portfolioId?: number): Promise<Suggestion
 
   const availability = checkFeature('rebalanceHints');
   if (!availability.enabled) {
-    return { context, suggestions: [], unavailableReason: availability.reason, disclaimer };
+    return {
+      context,
+      suggestions: [],
+      unavailableReason: availability.reason,
+      unavailable: availability.unavailable,
+      disclaimer,
+    };
   }
 
   const payload = [
@@ -161,11 +169,24 @@ export async function buildSuggestions(portfolioId?: number): Promise<Suggestion
   ].join('\n');
 
   try {
-    const text = await complete(PROMPT, payload, 1500);
-    return { context, suggestions: parseSuggestions(text), unavailableReason: null, disclaimer };
+    const text = await complete(PROMPT, payload, { feature: 'rebalanceHints', origin: 'user', maxTokens: 1500 });
+    return {
+      context,
+      suggestions: parseSuggestions(text),
+      unavailableReason: null,
+      unavailable: null,
+      disclaimer,
+    };
   } catch (err) {
-    log.warn(`Propozycje AI nieudane: ${errorMessage(err)}`);
-    return { context, suggestions: [], unavailableReason: 'Model nie odpowiedział.', disclaimer };
+    const failure = asUnavailable(err, getAiSettings().provider);
+    log.warn(`Propozycje AI nieudane: ${failure.detail ?? failure.message}`);
+    return {
+      context,
+      suggestions: [],
+      unavailableReason: failure.message,
+      unavailable: failure,
+      disclaimer,
+    };
   }
 }
 

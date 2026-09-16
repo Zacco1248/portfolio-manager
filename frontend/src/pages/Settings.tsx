@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ACCOUNT_KIND_LABELS, ACCOUNT_KINDS, ALERT_KIND_LABELS, rollUp, TAX_REGIMES, TAX_REGIME_LABELS } from '@portfolio/shared';
 import type { AccountKind, AlertKind, Portfolio, TaxRegime } from '@portfolio/shared';
-import { Card, DataTable, ErrorBanner, Field, Modal, Spinner, Toast, useToast } from '@/components/ui';
+import { Card, DataTable, ErrorBanner, Field, KpiTile, Modal, Spinner, Toast, useToast } from '@/components/ui';
 import { ApiError, api } from '@/lib/api';
 import { formatDate, formatDateTime, formatPln, relativeTime } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
@@ -169,6 +169,7 @@ export function Settings() {
       {tab === 'ai' && (
         <>
         <AiSettingsCard onMessage={show} />
+        <AiUsageCard onMessage={show} />
         </>
       )}
 
@@ -628,6 +629,172 @@ function AccountsCard({ onMessage }: { onMessage: (message: string, tone: 'info'
  * trafia do dostawcy modelu. Domyślnie wszystkie są wyłączone — obecność
  * klucza w `.env` nie oznacza zgody na wysyłanie danych.
  */
+/** Nazwy funkcji AI do rachunku — klucze z `AI_FEATURES` po stronie serwera. */
+const FEATURE_LABELS: Record<string, string> = {
+  news: 'Streszczenia wiadomości',
+  insights: 'Komentarz do podsumowania',
+  sessionSummary: 'Podsumowanie doby',
+  quickQuestion: 'Szybkie pytanie',
+  analystConsensus: 'Konsensus analityków',
+  rebalanceHints: 'Wskazówki do rebalansu',
+  monthlySummary: 'Podsumowanie miesiąca',
+  priceMoves: 'Wyjaśnianie ruchów cen',
+  purchaseCheck: 'Kontrola przed zakupem',
+  documentSummary: 'Streszczanie dokumentów',
+  taxAssistant: 'Asystent podatkowy',
+  importMapping: 'Podpowiedzi mapowania',
+  portfolioFit: 'Dopasowanie do portfela',
+  connectionTest: 'Test połączenia',
+};
+
+const usd = (microUsd: number): string => `$${(microUsd / 1_000_000).toFixed(2)}`;
+const thousands = (value: number): string => new Intl.NumberFormat('pl-PL').format(value);
+
+/**
+ * Rachunek za model.
+ *
+ * Koszt pojedynczego wywołania był liczony od początku, ale nikt go nie
+ * sumował — nie dało się odpowiedzieć ani „ile wydałem w tym miesiącu", ani
+ * „ile z tego poszło samo". Kolumna „źródło" rozdziela jedno od drugiego:
+ * bez kliknięcia wolno wołać model wyłącznie streszczeniom wiadomości.
+ */
+function AiUsageCard({ onMessage }: { onMessage: (message: string, tone: 'info' | 'error' | 'success') => void }) {
+  const usage = useAsync(() => api.ai.usage(), []);
+  const [budget, setBudget] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  if (usage.loading) return <Card title="Zużycie AI"><Spinner /></Card>;
+  if (usage.error) return <Card title="Zużycie AI"><ErrorBanner message={usage.error} onRetry={usage.reload} /></Card>;
+  if (!usage.data) return null;
+
+  const data = usage.data;
+  const current = budget ?? (data.budgetMicroUsd / 1_000_000).toFixed(2);
+  const usedBp = data.budgetMicroUsd > 0 ? Math.min((data.costMicroUsd / data.budgetMicroUsd) * 100, 100) : 0;
+  const over = data.budgetMicroUsd > 0 && data.costMicroUsd >= data.budgetMicroUsd;
+
+  const saveBudget = async () => {
+    setSaving(true);
+    try {
+      await api.ai.setBudget(Number(current) || 0);
+      usage.reload();
+      onMessage(Number(current) > 0 ? `Limit ustawiony na ${usd(Number(current) * 1_000_000)}` : 'Limit zdjęty', 'success');
+      setBudget(null);
+    } catch (err) {
+      onMessage(err instanceof ApiError ? err.message : 'Nie udało się zapisać limitu', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card title={`Zużycie AI od ${formatDate(data.since.slice(0, 10))}`}>
+      <div className="grid gap-3 p-4 pt-2 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiTile
+          label="Koszt miesiąca"
+          value={usd(data.costMicroUsd)}
+          hint={data.budgetMicroUsd > 0 ? `${over ? 'przekroczono limit' : 'z limitu'} ${usd(data.budgetMicroUsd)}` : 'bez limitu'}
+        />
+        <KpiTile
+          label="W tym z harmonogramu"
+          value={usd(data.scheduledCostMicroUsd)}
+          hint="tylko streszczenia wiadomości"
+        />
+        <KpiTile
+          label="Tokeny"
+          value={`${thousands(data.inputTokens)} / ${thousands(data.outputTokens)}`}
+          hint="wejście / wyjście"
+        />
+        <KpiTile
+          label="Wywołania"
+          value={String(data.calls)}
+          hint={data.failed > 0 ? `${data.failed} nieudanych` : 'wszystkie udane'}
+        />
+      </div>
+
+      <div className="px-4 pb-3">
+        {data.budgetMicroUsd > 0 && (
+          <div className="mb-2 h-2 overflow-hidden rounded-full bg-surface-overlay">
+            <div className={`h-full rounded-full ${over ? 'bg-loss' : 'bg-accent'}`} style={{ width: `${usedBp}%` }} />
+          </div>
+        )}
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="w-full sm:w-40">
+            <Field label="Limit miesięczny (USD)">
+              <input
+                className="input"
+                type="number"
+                min="0"
+                step="0.5"
+                value={current}
+                onChange={(e) => setBudget(e.target.value)}
+              />
+            </Field>
+          </div>
+          <button type="button" className="btn" disabled={saving} onClick={() => void saveBudget()}>
+            {saving ? 'Zapisuję…' : 'Zapisz limit'}
+          </button>
+          <span className="text-2xs text-content-muted">
+            0 znosi limit. Po przekroczeniu model przestaje odpowiadać, a karty podają to jako powód —
+            liczby liczą się dalej, bo powstają lokalnie.
+          </span>
+        </div>
+      </div>
+
+      {data.byFeature.length > 0 && (
+        <DataTable
+          headers={[
+            { label: 'Funkcja' },
+            { label: 'Źródło' },
+            { label: 'Wywołań', align: 'right' },
+            { label: 'Nieudanych', align: 'right' },
+            { label: 'Tokeny', align: 'right' },
+            { label: 'Koszt', align: 'right' },
+          ]}
+        >
+          {data.byFeature.map((row) => (
+            <tr key={`${row.feature}-${row.origin}`}>
+              <td className="table-cell">{FEATURE_LABELS[row.feature] ?? row.feature}</td>
+              <td className="table-cell text-content-secondary">
+                {row.origin === 'schedule' ? 'harmonogram' : 'na żądanie'}
+              </td>
+              <td className="table-cell tabular text-right">{row.calls}</td>
+              <td className={`table-cell tabular text-right ${row.failed > 0 ? 'text-loss' : ''}`}>{row.failed}</td>
+              <td className="table-cell tabular text-right">
+                {thousands(row.inputTokens + row.outputTokens)}
+              </td>
+              <td className="table-cell tabular text-right">{usd(row.costMicroUsd)}</td>
+            </tr>
+          ))}
+        </DataTable>
+      )}
+
+      {data.byFeature.length === 0 && (
+        <p className="px-4 pb-4 text-2xs text-content-muted">
+          W tym miesiącu nie było jeszcze żadnego wywołania modelu.
+        </p>
+      )}
+
+      {data.recentFailures.length > 0 && (
+        <div className="border-t border-surface-border">
+          <h3 className="card-title">Ostatnie niepowodzenia</h3>
+          <ul className="space-y-1.5 p-4 pt-2">
+            {data.recentFailures.map((failure, index) => (
+              <li key={index} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-2xs">
+                <time className="tabular text-content-muted">{formatDateTime(failure.createdAt)}</time>
+                <span className="text-loss">
+                  {FEATURE_LABELS[failure.feature] ?? failure.feature}
+                  {failure.errorKind ? ` · ${failure.errorKind}` : ''}
+                </span>
+                <span className="min-w-0 flex-1 text-content-secondary">{failure.errorMessage}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function AiSettingsCard({ onMessage }: { onMessage: (message: string, tone: 'info' | 'error' | 'success') => void }) {
   const ai = useAsync(() => api.ai.status(), []);
   const [model, setModel] = useState<string | null>(null);

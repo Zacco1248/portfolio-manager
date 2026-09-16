@@ -13,8 +13,9 @@ import {
 } from '../lib/headlines.js';
 import { errorMessage } from '../lib/errors.js';
 import { createLogger } from '../lib/logger.js';
-import { checkFeature } from './ai-config.js';
-import { completeWithMeta, estimateCostMicroUsd } from './ai.js';
+import type { AiUnavailable } from '@portfolio/shared';
+import { checkFeature, getAiSettings } from './ai-config.js';
+import { asUnavailable, completeWithMeta, estimateCostMicroUsd } from './ai.js';
 import { activePortfolioIds, buildPositions } from './positions.js';
 import { readHistory } from './snapshots.js';
 import { buildTaxReport } from './tax.js';
@@ -47,7 +48,10 @@ export interface AssistUsage {
 export interface AssistResult<T> {
   data: T;
   text: string | null;
+  /** Gotowe zdanie dla interfejsu — zawsze równe `unavailable.message`. */
   unavailableReason: string | null;
+  /** Ten sam powód z rodzajem, po którym interfejs dobiera akcję. */
+  unavailable: AiUnavailable | null;
   disclaimer: string;
   usage?: AssistUsage;
 }
@@ -63,17 +67,34 @@ async function withModel<T>(
   payload: string,
   maxTokens = 1200,
 ): Promise<AssistResult<T>> {
+  const unavailable = (reason: AiUnavailable): AssistResult<T> => ({
+    data,
+    text: null,
+    unavailableReason: reason.message,
+    unavailable: reason,
+    disclaimer: ASSIST_DISCLAIMER,
+  });
+
   const availability = checkFeature(feature);
-  if (!availability.enabled) {
-    return { data, text: null, unavailableReason: availability.reason, disclaimer: ASSIST_DISCLAIMER };
-  }
+  if (!availability.enabled) return unavailable(availability.unavailable!);
 
   try {
-    const meta = await completeWithMeta(prompt, payload, maxTokens);
+    // Wszystkie funkcje asystenta startują z kliknięcia — automat ma dostęp
+    // wyłącznie do streszczeń wiadomości.
+    const meta = await completeWithMeta(prompt, payload, { feature, origin: 'user', maxTokens });
+    if (!meta.text) {
+      return unavailable({
+        kind: 'empty_reply',
+        message: 'Model odpowiedział bez treści. Spróbuj ponownie albo wybierz inny model w Ustawieniach.',
+        retryable: true,
+      });
+    }
+
     return {
       data,
       text: meta.text,
-      unavailableReason: meta.text ? null : 'Model nie zwrócił treści.',
+      unavailableReason: null,
+      unavailable: null,
       disclaimer: ASSIST_DISCLAIMER,
       usage: {
         provider: meta.provider,
@@ -84,8 +105,11 @@ async function withModel<T>(
       },
     };
   } catch (err) {
-    log.warn(`${feature}: model nie odpowiedział — ${errorMessage(err)}`);
-    return { data, text: null, unavailableReason: 'Model nie odpowiedział.', disclaimer: ASSIST_DISCLAIMER };
+    // Powód bierzemy z `explainAiError` zamiast pisać „model nie odpowiedział":
+    // 401, 429 i timeout wymagają od użytkownika zupełnie różnych rzeczy.
+    const failure = asUnavailable(err, getAiSettings().provider);
+    log.warn(`${feature}: ${failure.detail ?? failure.message}`);
+    return unavailable(failure);
   }
 }
 
@@ -743,7 +767,15 @@ export async function explainPriceMove(
 ): Promise<AssistResult<PriceMoveFacts | null>> {
   let facts = priceMoveFacts(instrumentId, days);
   if (!facts) {
-    return { data: null, text: null, unavailableReason: 'Nie ma takiego instrumentu.', disclaimer: ASSIST_DISCLAIMER };
+    // Brak instrumentu to nie jest awaria modelu, więc nie dostaje rodzaju
+    // niedostępności — interfejs pokazuje samo zdanie, bez akcji do kliknięcia.
+    return {
+      data: null,
+      text: null,
+      unavailableReason: 'Nie ma takiego instrumentu.',
+      unavailable: null,
+      disclaimer: ASSIST_DISCLAIMER,
+    };
   }
 
   /*

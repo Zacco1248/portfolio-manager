@@ -22,6 +22,7 @@ import { extractArticle } from '../lib/readability.js';
 import { asyncHandler } from '../lib/http.js';
 import { evaluateAlerts, recentAlertEvents } from '../services/alerts.js';
 import { AI_FEATURES, AI_PROVIDERS, aiStatus, setApiKey, updateAiSettings } from '../services/ai-config.js';
+import { setMonthlyBudgetMicroUsd, usageSummary } from '../services/ai-usage.js';
 import { classifyAll } from '../services/classify.js';
 import { duplicateSummary } from '../services/duplicates.js';
 import { buildContext, buildSuggestions } from '../services/suggestions.js';
@@ -302,8 +303,21 @@ toolsRouter.post(
     // Kliknięcie „Odśwież" ma nadrobić zaległości, a nie zdjąć jedną paczkę —
     // przy kilkuset wiadomościach część zostawała bez streszczenia i wyglądało
     // to na losowe działanie funkcji.
-    const analyzed = await analyzePendingNews({ maxBatches: MAX_BATCHES_ON_DEMAND });
-    res.json({ ok: true, fetched, market, analyzed });
+    const analysis = await analyzePendingNews({ maxBatches: MAX_BATCHES_ON_DEMAND, origin: 'user' });
+    /*
+     * `ok` odbija to, co faktycznie się stało. Wcześniej nieudana analiza
+     * kończyła się zielonym komunikatem sukcesu z treścią „model nie zwrócił
+     * analiz" — dokładnie odwrotnie, niż wyglądała.
+     */
+    res.json({
+      ok: analysis.failure === null,
+      fetched,
+      market,
+      analyzed: analysis.message,
+      analyzedCount: analysis.analyzed,
+      pending: analysis.pending,
+      unavailable: analysis.failure,
+    });
   }),
 );
 
@@ -590,7 +604,9 @@ toolsRouter.get(
       taxesPlnMinor: costs.reduce((sum, row) => sum + row.tax, 0),
     });
 
-    res.json({ narrative });
+    // `narrative` zostaje dla zgodności, `unavailable` niesie powód milczenia —
+    // bez niego interfejs zgadywał i zawsze obwiniał wyłączoną funkcję.
+    res.json({ narrative: narrative.text, unavailable: narrative.unavailable });
   }),
 );
 
@@ -605,6 +621,26 @@ toolsRouter.post(
     res.json(await testAiConnection());
   }),
 );
+
+/** Rachunek za bieżący miesiąc: koszt, tokeny, podział na funkcje i ostatnie awarie. */
+toolsRouter.get('/ai/usage', (_req, res) => {
+  res.json(usageSummary());
+});
+
+/**
+ * Miesięczny limit kosztów. Zero znosi limit.
+ *
+ * Kwota przychodzi w dolarach, bo tak ją widać w interfejsie; wewnątrz
+ * trzymamy mikrodolary, żeby pojedyncze wywołanie za ułamek centa nie znikało
+ * w zaokrągleniu.
+ */
+toolsRouter.put('/ai/budget', (req, res, next) => {
+  const parsed = z.object({ monthlyUsd: z.number().min(0).max(10_000) }).safeParse(req.body);
+  if (!parsed.success) return next(parsed.error);
+
+  setMonthlyBudgetMicroUsd(Math.round(parsed.data.monthlyUsd * 1_000_000));
+  res.json(usageSummary());
+});
 
 toolsRouter.patch('/ai', (req, res, next) => {
   const parsed = z

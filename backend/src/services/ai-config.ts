@@ -1,3 +1,4 @@
+import type { AiUnavailable, AiUnavailableKind } from '@portfolio/shared';
 import { config } from '../config.js';
 import { getSetting, setSetting } from './settings.js';
 
@@ -205,7 +206,14 @@ export function getAiSettings(): AiSettings {
    * klucz OpenAI, dostawał „brak klucza Anthropic" mimo posiadania działającego
    * klucza — sensowniej użyć tego, który jest, niż odmówić działania.
    */
-  const provider = apiKeyFor(chosen) ? chosen : (OTHER_PROVIDER[chosen] ?? chosen);
+  /*
+   * Zejście na drugiego dostawcę ma sens tylko wtedy, gdy on faktycznie ma
+   * klucz. Wcześniej warunek nie sprawdzał tego drugiego członu, więc przy
+   * pustej konfiguracji (żadnego klucza) komunikat mówił „brak klucza OpenAI"
+   * komuś, kto w ustawieniach wybrał Anthropic — i kierował do nie tego pola.
+   */
+  const other = OTHER_PROVIDER[chosen];
+  const provider = apiKeyFor(chosen) ? chosen : other && apiKeyFor(other) ? other : chosen;
   const switched = provider !== chosen;
 
   return {
@@ -311,7 +319,31 @@ export interface AiAvailability {
   /** Czy dana funkcja może teraz zadziałać: włączona i z dostępnym kluczem. */
   enabled: boolean;
   reason: string | null;
+  /**
+   * Ten sam powód w postaci rozpoznawalnej dla interfejsu.
+   *
+   * `reason` zostaje jako gotowe zdanie, bo używa go już kilka miejsc, ale samo
+   * zdanie nie pozwala odróżnić braku klucza od wyłączonej funkcji — a to
+   * decyduje, czy pokazać link do ustawień, czy przycisk włączający.
+   */
+  unavailable: AiUnavailable | null;
 }
+
+/**
+ * Funkcje, które wolno wywołać bez udziału użytkownika.
+ *
+ * Zasada: harmonogram może wydawać tokeny wyłącznie na streszczenia
+ * wiadomości. Wszystko inne — komentarze, podsumowania, podpowiedzi — startuje
+ * dopiero po kliknięciu, bo inaczej rachunek u dostawcy rośnie w tle i nie ma
+ * jak połączyć go z czymkolwiek, o co użytkownik prosił.
+ *
+ * Lista jest egzekwowana w `completeWithMeta`, które wymaga podania źródła
+ * wywołania. Dopisanie modelu do nowego zadania cyklicznego wymaga świadomej
+ * zmiany tutaj, a nie tylko pamięci autora.
+ */
+export const SCHEDULED_FEATURES: readonly AiFeature[] = ['news'];
+
+export type AiCallOrigin = 'user' | 'schedule';
 
 /**
  * Funkcje, które nie wołają modelu językowego.
@@ -330,31 +362,31 @@ export function checkFeature(feature: AiFeature): AiAvailability {
    * zgłaszamy przed wyłączoną flagą: włączenie funkcji bez klucza i tak nic
    * nie da, a komunikat „funkcja wyłączona" kierował wtedy w złe miejsce.
    */
+  const unavailable = (kind: AiUnavailableKind, message: string): AiAvailability => ({
+    enabled: false,
+    reason: message,
+    unavailable: { kind, message, retryable: false },
+  });
+
+  const label = settings.provider === 'openai' ? 'OpenAI' : 'Anthropic';
+
   if (!FEATURES_WITHOUT_MODEL.includes(feature) && !apiKeyFor(settings.provider)) {
-    const label = settings.provider === 'openai' ? 'OpenAI' : 'Anthropic';
-    return {
-      enabled: false,
-      reason: `Brak klucza ${label} — wpisz go w Ustawieniach, w karcie „Funkcje AI".`,
-    };
+    return unavailable('no_key', `Brak klucza ${label} — wpisz go w Ustawieniach, w karcie „Funkcje AI".`);
   }
 
   if (!settings.features[feature]) {
-    return { enabled: false, reason: `Funkcja „${AI_FEATURE_INFO[feature].label}" jest wyłączona w ustawieniach.` };
+    return unavailable('feature_off', `Funkcja „${AI_FEATURE_INFO[feature].label}" jest wyłączona w ustawieniach.`);
   }
 
-  if (FEATURES_WITHOUT_MODEL.includes(feature)) return { enabled: true, reason: null };
+  if (FEATURES_WITHOUT_MODEL.includes(feature)) return { enabled: true, reason: null, unavailable: null };
 
   if (!apiKeyFor(settings.provider)) {
-    const label = settings.provider === 'openai' ? 'OpenAI' : 'Anthropic';
     // Komunikat mówi wprost o wybranym dostawcy: przy `aiProvider = openai`
     // i kluczu Anthropic w `.env` samo „brak klucza" bywało mylące.
-    return {
-      enabled: false,
-      reason: `Brak klucza ${label} — wpisz go w Ustawieniach (dostawca: ${label}).`,
-    };
+    return unavailable('no_key', `Brak klucza ${label} — wpisz go w Ustawieniach (dostawca: ${label}).`);
   }
 
-  return { enabled: true, reason: null };
+  return { enabled: true, reason: null, unavailable: null };
 }
 
 /** Stan do pokazania w ustawieniach: co jest skonfigurowane, a co nie. */

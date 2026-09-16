@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { AiDisclaimer, Card, ErrorBanner, Field, Spinner } from '@/components/ui';
+import { AiDisclaimer, AiUnavailableNotice, Card, ErrorBanner, Field, Spinner } from '@/components/ui';
+import type { AiUnavailable } from '@portfolio/shared';
 import { SymbolSearch } from '@/components/SymbolSearch';
 import { ApiError, api } from '@/lib/api';
 import { formatPercent, formatPln, toneClass } from '@/lib/format';
@@ -44,8 +45,12 @@ function useAssist<T>() {
     result: null,
     error: null,
   });
+  // Ostatnie wywołanie zapamiętujemy, żeby „Spróbuj ponownie" działało w każdej
+  // karcie bez powtarzania parametrów formularza w kilku miejscach.
+  const [last, setLast] = useState<(() => Promise<T>) | null>(null);
 
   const run = async (call: () => Promise<T>) => {
+    setLast(() => call);
     setState({ busy: true, result: null, error: null });
     try {
       setState({ busy: false, result: await call(), error: null });
@@ -58,24 +63,44 @@ function useAssist<T>() {
     }
   };
 
-  return { ...state, run };
+  const retry = last ? () => void run(last) : undefined;
+
+  return { ...state, run, retry };
 }
 
 /** Komentarz modelu albo powód jego braku — ten sam układ we wszystkich kartach. */
-function ModelText({ text, reason, disclaimer }: { text: string | null; reason: string | null; disclaimer: string }) {
-  if (!text) {
+function ModelText({
+  result,
+  onRetry,
+}: {
+  result: { text: string | null; unavailable: AiUnavailable | null; unavailableReason: string | null; disclaimer: string };
+  onRetry?: () => void;
+}) {
+  if (!result.text) {
+    if (result.unavailable) {
+      return (
+        <div className="border-t border-surface-border">
+          <AiUnavailableNotice
+            reason={result.unavailable}
+            onRetry={onRetry}
+            note="Liczby powyżej powstają lokalnie i nie zależą od modelu."
+          />
+        </div>
+      );
+    }
+
     return (
       <p className="border-t border-surface-border px-4 py-3 text-2xs text-content-muted">
-        {reason ?? 'Brak komentarza.'} Liczby powyżej powstają lokalnie i nie zależą od AI.
+        {result.unavailableReason ?? 'Brak komentarza.'} Liczby powyżej powstają lokalnie i nie zależą od AI.
       </p>
     );
   }
 
   return (
     <div className="border-t border-surface-border">
-      <p className="whitespace-pre-wrap px-4 py-3 text-sm leading-relaxed text-content-secondary">{text}</p>
+      <p className="whitespace-pre-wrap px-4 py-3 text-sm leading-relaxed text-content-secondary">{result.text}</p>
       <div className="px-4 pb-3">
-        <AiDisclaimer text={disclaimer} />
+        <AiDisclaimer text={result.disclaimer} />
       </div>
     </div>
   );
@@ -103,7 +128,7 @@ function MonthlyCard({ portfolioId, enabled }: { portfolioId?: number; enabled: 
         whenToUse="Po zamknięciu miesiąca, gdy chcesz jednym akapitem opisać, co się w portfelu wydarzyło."
       />
       <div className="flex flex-wrap items-end gap-3 p-4 pt-2">
-        <div className="w-40">
+        <div className="w-full sm:w-40">
           <Field label="Miesiąc">
             <input className="input" type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
           </Field>
@@ -152,11 +177,7 @@ function MonthlyCard({ portfolioId, enabled }: { portfolioId?: number; enabled: 
               }
             />
           </div>
-          <ModelText
-            text={assist.result.text}
-            reason={assist.result.unavailableReason}
-            disclaimer={assist.result.disclaimer}
-          />
+          <ModelText result={assist.result} onRetry={assist.retry} />
         </>
       )}
     </Card>
@@ -174,7 +195,7 @@ function PurchaseCard({ portfolioId, enabled }: { portfolioId?: number; enabled:
     <Card title="Kontrola przed zakupem" action={<FeatureBadge enabled={enabled} />}>
       <FeatureHelp featureKey="purchaseCheck" whenToUse="Zanim dołożysz pozycję — pokazuje, jak zmieni się koncentracja i ekspozycja portfela." />
       <div className="flex flex-wrap items-end gap-3 p-4 pt-2">
-        <div className="w-64">
+        <div className="w-full sm:w-64">
           <Field label="Instrument" hint="Działa też dla spółek spoza portfela.">
             {/*
               Podpowiedzi z tej samej wyszukiwarki co przy dodawaniu transakcji —
@@ -188,7 +209,7 @@ function PurchaseCard({ portfolioId, enabled }: { portfolioId?: number; enabled:
             />
           </Field>
         </div>
-        <div className="w-36">
+        <div className="w-full sm:w-36">
           <Field label="Kwota zakupu">
             <input className="input" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="1000" />
           </Field>
@@ -236,11 +257,7 @@ function PurchaseCard({ portfolioId, enabled }: { portfolioId?: number; enabled:
             </ul>
           )}
 
-          <ModelText
-            text={assist.result.text}
-            reason={assist.result.unavailableReason}
-            disclaimer={assist.result.disclaimer}
-          />
+          <ModelText result={assist.result} onRetry={assist.retry} />
         </>
       )}
     </Card>
@@ -261,7 +278,7 @@ function TaxCard({ portfolioId, enabled }: { portfolioId?: number; enabled: bool
     <Card title="Asystent podatkowy" action={<FeatureBadge enabled={enabled} />}>
       <FeatureHelp featureKey="taxAssistant" whenToUse="Przy wypełnianiu PIT-38 albo gdy nie wiesz, jak rozliczyć konkretne zdarzenie." />
       <div className="flex flex-wrap items-end gap-3 p-4 pt-2">
-        <div className="w-28">
+        <div className="w-full sm:w-28">
           <Field label="Rok">
             <select className="input" value={activeYear} onChange={(e) => setYear(e.target.value)}>
               {(years.data ?? []).map((entry) => (
@@ -312,11 +329,7 @@ function TaxCard({ portfolioId, enabled }: { portfolioId?: number; enabled: bool
             />
             <Fact label="Dywidendy — do dopłaty" value={formatPln(assist.result.data.dividendDuePlnMinor)} />
           </div>
-          <ModelText
-            text={assist.result.text}
-            reason={assist.result.unavailableReason}
-            disclaimer={assist.result.disclaimer}
-          />
+          <ModelText result={assist.result} onRetry={assist.retry} />
         </>
       )}
     </Card>
@@ -363,11 +376,7 @@ function DocumentCard({ enabled }: { enabled: boolean }) {
               Dokument był dłuższy niż limit — streszczenie obejmuje pierwsze {assist.result.data.characters} znaków.
             </p>
           )}
-          <ModelText
-            text={assist.result.text}
-            reason={assist.result.unavailableReason}
-            disclaimer={assist.result.disclaimer}
-          />
+          <ModelText result={assist.result} onRetry={assist.retry} />
         </>
       )}
     </Card>
@@ -489,11 +498,7 @@ function QuestionCard({ portfolioId, enabled }: { portfolioId?: number; enabled:
       {assist.busy && <Spinner label="Analizuję strukturę portfela…" />}
 
       {assist.result && (
-        <ModelText
-          text={assist.result.text}
-          reason={assist.result.unavailableReason}
-          disclaimer={assist.result.disclaimer}
-        />
+        <ModelText result={assist.result} onRetry={assist.retry} />
       )}
     </Card>
   );

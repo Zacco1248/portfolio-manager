@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { AI_DISCLAIMER, isDomesticInstrument } from '@portfolio/shared';
-import type { Importance, NewsItem, Sentiment } from '@portfolio/shared';
+import type { AiUnavailable, Importance, NewsItem, Sentiment } from '@portfolio/shared';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { instruments, newsItems, watchlist } from '../db/schema.js';
@@ -15,6 +15,7 @@ import type { FeedEntry } from '../lib/rss.js';
 import { createLogger } from '../lib/logger.js';
 import { analyzeNewsBatch } from './ai.js';
 import { checkFeature, getAiSettings } from './ai-config.js';
+import type { AiCallOrigin } from './ai-config.js';
 import { instrumentsNeedingPrices } from './prices.js';
 
 const log = createLogger('news');
@@ -251,36 +252,101 @@ export async function fetchNewsFor(targets: InstrumentRow[]): Promise<string> {
  */
 export const MAX_BATCHES_ON_DEMAND = 8;
 
-export async function analyzePendingNews(options: { maxBatches?: number } = {}): Promise<string> {
+/**
+ * Ile razy wiadomość może wrócić do kolejki, zanim ją odpuścimy.
+ *
+ * Dotyczy wyłącznie sytuacji, w której model odpowiedział, ale tej konkretnej
+ * pozycji nie objął — zwykle dlatego, że nie potrafi jej streścić. Awaria
+ * dostawcy prób nie zużywa, bo nie mówi nic o samej wiadomości.
+ */
+const MAX_ANALYSIS_ATTEMPTS = 3;
+
+export interface AnalyzeNewsOutcome {
+  analyzed: number;
+  pending: number;
+  failure: AiUnavailable | null;
+  message: string;
+}
+
+export async function analyzePendingNews(options: { maxBatches?: number; origin?: AiCallOrigin } = {}): Promise<AnalyzeNewsOutcome> {
+  const countPending = (): number =>
+    db.select().from(newsItems).where(isNull(newsItems.aiAnalyzedAt)).all().length;
+
   // Powód bierzemy z konfiguracji, zamiast zgadywać: funkcja bywa wyłączona
   // mimo obecnego klucza, a poprzedni komunikat obwiniał zawsze brak klucza.
   const availability = checkFeature('news');
-  if (!availability.enabled) return `analiza AI pominięta — ${availability.reason ?? 'funkcja niedostępna'}`;
-
-  const maxBatches = Math.max(options.maxBatches ?? 1, 1);
-  let analyzed = 0;
-
-  for (let batch = 0; batch < maxBatches; batch += 1) {
-    const done = await analyzeOneBatch();
-    analyzed += done;
-    // Mniej niż pełna paczka znaczy, że kolejka się skończyła.
-    if (done < config.ai.batchLimit) break;
+  if (!availability.enabled) {
+    return {
+      analyzed: 0,
+      pending: countPending(),
+      failure: availability.unavailable,
+      message: `analiza AI pominięta — ${availability.reason ?? 'funkcja niedostępna'}`,
+    };
   }
 
-  const left = db
-    .select()
-    .from(newsItems)
-    .where(isNull(newsItems.aiAnalyzedAt))
-    .all().length;
+  const maxBatches = Math.max(options.maxBatches ?? 1, 1);
+  const origin = options.origin ?? 'user';
+  let analyzed = 0;
+  let failure: AiUnavailable | null = null;
 
-  if (analyzed === 0) return left === 0 ? 'brak wiadomości do analizy' : 'model nie zwrócił analiz';
-  return left > 0
-    ? `przeanalizowano ${analyzed} wiadomości, w kolejce zostaje ${left}`
-    : `przeanalizowano ${analyzed} wiadomości`;
+  for (let batch = 0; batch < maxBatches; batch += 1) {
+    const result = await analyzeOneBatch(origin);
+    analyzed += result.analyzed;
+
+    /*
+     * Awaria dostawcy przerywa pętlę. Kolejne siedem paczek poleciałoby z tym
+     * samym błędnym kluczem albo w ten sam przekroczony limit, więc jedyne, co
+     * by to dało, to siedem kolejnych nieudanych zapytań.
+     */
+    if (result.failure) {
+      failure = result.failure;
+      break;
+    }
+
+    // Mniej niż pełna paczka znaczy, że kolejka się skończyła.
+    if (result.size < config.ai.batchLimit) break;
+  }
+
+  const left = countPending();
+
+  if (failure) {
+    return {
+      analyzed,
+      pending: left,
+      failure,
+      message: `analiza przerwana — ${failure.message}${analyzed > 0 ? ` (zdążyło przejść ${analyzed})` : ''}`,
+    };
+  }
+
+  if (analyzed === 0) {
+    return {
+      analyzed: 0,
+      pending: left,
+      failure: null,
+      message: left === 0 ? 'brak wiadomości do analizy' : 'model nie zwrócił analiz',
+    };
+  }
+
+  return {
+    analyzed,
+    pending: left,
+    failure: null,
+    message:
+      left > 0
+        ? `przeanalizowano ${analyzed} wiadomości, w kolejce zostaje ${left}`
+        : `przeanalizowano ${analyzed} wiadomości`,
+  };
 }
 
-/** Jedna paczka wysłana do modelu. Zwraca liczbę zapisanych analiz. */
-async function analyzeOneBatch(): Promise<number> {
+interface BatchOutcome {
+  /** Ile wiadomości poszło do modelu w tej paczce. */
+  size: number;
+  analyzed: number;
+  failure: AiUnavailable | null;
+}
+
+/** Jedna paczka wysłana do modelu. */
+async function analyzeOneBatch(origin: AiCallOrigin): Promise<BatchOutcome> {
   const pending = db
     .select()
     .from(newsItems)
@@ -289,18 +355,27 @@ async function analyzeOneBatch(): Promise<number> {
     .limit(config.ai.batchLimit)
     .all();
 
-  if (pending.length === 0) return 0;
+  if (pending.length === 0) return { size: 0, analyzed: 0, failure: null };
 
   const instrumentMap = new Map(db.select().from(instruments).all().map((i) => [i.id, i]));
 
-  const results = await analyzeNewsBatch(
+  const { analyses: results, failure } = await analyzeNewsBatch(
     pending.map((item) => ({
       id: item.id,
       title: item.title,
       summary: item.rawSummary,
       instrumentName: item.instrumentId ? (instrumentMap.get(item.instrumentId)?.name ?? null) : null,
     })),
+    origin,
   );
+
+  /*
+   * Przy awarii dostawcy nie ruszamy kolejki. Wcześniej wszystkie
+   * dwadzieścia pięć wiadomości dostawało stempel „przeanalizowane" mimo
+   * braku odpowiedzi, więc pojedynczy błąd 429 trwale pozbawiał je
+   * streszczenia i nie było jak tego cofnąć.
+   */
+  if (failure) return { size: pending.length, analyzed: 0, failure };
 
   let analyzed = 0;
   for (const result of results) {
@@ -321,16 +396,25 @@ async function analyzeOneBatch(): Promise<number> {
   }
 
   /*
-   * Wiadomości, których model nie objął odpowiedzią, oznaczamy jako
-   * przetworzone bez streszczenia — inaczej wracałyby w każdej kolejnej paczce
-   * i blokowały kolejkę w nieskończoność.
+   * Wiadomości, których model nie objął odpowiedzią mimo sprawnego połączenia,
+   * dostają kolejną próbę — a po `MAX_ANALYSIS_ATTEMPTS` odpuszczamy je
+   * z zapisanym powodem, żeby nie blokowały kolejki w nieskończoność.
    */
   const missing = pending.filter((item) => !results.some((r) => r.id === item.id));
   for (const item of missing) {
-    db.update(newsItems).set({ aiAnalyzedAt: nowIso() }).where(eq(newsItems.id, item.id)).run();
+    const attempts = item.aiAttempts + 1;
+    const exhausted = attempts >= MAX_ANALYSIS_ATTEMPTS;
+    db.update(newsItems)
+      .set({
+        aiAttempts: attempts,
+        aiAnalyzedAt: exhausted ? nowIso() : null,
+        aiError: exhausted ? `Model pominął tę wiadomość w ${attempts} podejściach.` : null,
+      })
+      .where(eq(newsItems.id, item.id))
+      .run();
   }
 
-  return analyzed;
+  return { size: pending.length, analyzed, failure: null };
 }
 
 export interface NewsQuery {
