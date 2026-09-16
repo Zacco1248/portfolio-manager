@@ -14,6 +14,7 @@ import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { accounts, bondHoldings, instruments, portfolios, realizedGains, transactions } from '../db/schema.js';
 import type { InstrumentRow, PortfolioRow } from '../db/schema.js';
+import { today } from '../lib/dates.js';
 import { computeFifo, groupForFifo, parseGroupKey } from './fifo.js';
 import type { OpenLot } from './fifo.js';
 import { getLatestPrice } from './prices.js';
@@ -45,16 +46,42 @@ export function toInstrumentDto(row: InstrumentRow): Instrument {
  * To nie są kursy transakcyjne: te zostają zapisane przy transakcji i służą
  * wyłącznie do rozliczenia podatkowego.
  */
-function currentFxRates(): Map<string, number> {
-  const rows = db.all<{ currency: string; rate_e6: number }>(sql`
-    SELECT f.currency, f.rate_e6
+interface CurrentFx {
+  rateE6: number;
+  /** Data publikacji kursu; `null` dla waluty bazowej, która kursu nie ma. */
+  date: string | null;
+}
+
+/**
+ * Po ilu dniach kurs uznajemy za nieaktualny.
+ *
+ * NBP publikuje tabelę A w dni robocze, więc długi weekend to najwyżej cztery
+ * dni. Siedem zostawia zapas i nie zapala ostrzeżenia bez powodu.
+ */
+const FX_STALE_DAYS = 7;
+
+function currentFxRates(): Map<string, CurrentFx> {
+  const rows = db.all<{ currency: string; rate_e6: number; date: string }>(sql`
+    SELECT f.currency, f.rate_e6, f.date
     FROM fx_rates f
     JOIN (SELECT currency, MAX(date) AS max_date FROM fx_rates GROUP BY currency) latest
       ON latest.currency = f.currency AND latest.max_date = f.date
   `);
-  const map = new Map<string, number>([[config.baseCurrency, 1_000_000]]);
-  for (const row of rows) map.set(row.currency, row.rate_e6);
+  const map = new Map<string, CurrentFx>([[config.baseCurrency, { rateE6: 1_000_000, date: null }]]);
+  for (const row of rows) map.set(row.currency, { rateE6: row.rate_e6, date: row.date });
   return map;
+}
+
+/**
+ * Czy kurs jest starszy niż próg.
+ *
+ * Wcześniej wycena brała po prostu `MAX(date)` i nie patrzyła na wiek, więc
+ * świeże notowanie przeliczane kursem sprzed dwóch miesięcy wyglądało jak
+ * poprawna wycena. `priceStale` tego nie łapało, bo dotyczy wyłącznie ceny.
+ */
+function fxIsStale(date: string | null, day: string): boolean {
+  if (date === null) return false;
+  return (Date.parse(day) - Date.parse(date)) / 86_400_000 > FX_STALE_DAYS;
 }
 
 export interface PositionsResult {
@@ -142,6 +169,7 @@ export function buildPositions(portfolioIds?: number[]): PositionsResult {
   const instrumentMap = new Map<number, InstrumentRow>(instrumentRows.map((i) => [i.id, i]));
 
   const fxRates = currentFxRates();
+  const day = today(config.timezone);
   const priceCache = new Map<number, LatestPrice | null>();
 
   const cashByPortfolio = new Map<number, number>();
@@ -223,11 +251,17 @@ export function buildPositions(portfolioIds?: number[]): PositionsResult {
     }
 
     const quoteCurrency = price?.currency ?? instrument.currency;
-    const fxRateE6 = fxRates.get(quoteCurrency.toUpperCase()) ?? 1_000_000;
+    const fx = fxRates.get(quoteCurrency.toUpperCase()) ?? { rateE6: 1_000_000, date: null };
+    const fxRateE6 = fx.rateE6;
 
     const valueInQuoteCurrency = price
       ? positionValueMinor(fifo.remainingQtyE8, price.priceE8, quoteCurrency)
       : 0;
+    /*
+     * Bez ceny wartość zostaje na koszcie nabycia, żeby pozycja nie wypadła
+     * z sumy portfela — ale wynik raportujemy wtedy jako nieznany. Zerowy
+     * wynik czytało się jak „nic się nie zmieniło", a znaczył „nie wiem".
+     */
     const valuePlnMinor = price
       ? convertMinor(valueInQuoteCurrency, fxRateE6, quoteCurrency, config.baseCurrency)
       : fifo.remainingCostPlnMinor;
@@ -252,12 +286,17 @@ export function buildPositions(portfolioIds?: number[]): PositionsResult {
       priceE8: price?.priceE8 ?? null,
       valuePlnMinor,
       unrealizedPlnMinor: valuePlnMinor - fifo.remainingCostPlnMinor,
-      unrealizedBp: changeBp(valuePlnMinor, fifo.remainingCostPlnMinor),
+      // Bez ceny wartość równa się kosztowi, więc zmiana procentowa wyszłaby
+      // zerowa — a to nie to samo co „kurs stoi w miejscu".
+      unrealizedBp: price ? changeBp(valuePlnMinor, fifo.remainingCostPlnMinor) : null,
       dayChangePlnMinor: prevValuePln === null ? null : valuePlnMinor - prevValuePln,
       dayChangeBp: prevValuePln === null ? null : changeBp(valuePlnMinor, prevValuePln),
       sharePortfolioBp: 0, // uzupełniane niżej, gdy znamy sumę
       priceStale: price?.stale ?? true,
+      priceMissing: price === null,
       fxRateE6,
+      fxAsOf: fx.date,
+      fxStale: fxIsStale(fx.date, day),
       accounts: splitByAccount(fifo.openLots, accountOf, valuePlnMinor).map((slice) => ({
         ...slice,
         accountName: slice.accountId === null ? null : (accountNames.get(slice.accountId) ?? null),
@@ -371,9 +410,13 @@ function bondPositions(portfolios: PortfolioRow[], accountNames: Map<number, str
         dayChangePlnMinor: null,
         dayChangeBp: null,
         sharePortfolioBp: 0,
-        // Wartość wynika z parametrów emisji, a nie z notowania — nigdy nie jest nieświeża.
+        // Wartość wynika z parametrów emisji, a nie z notowania — nigdy nie jest
+        // nieświeża i nie przechodzi przez żaden kurs walutowy.
         priceStale: false,
+        priceMissing: false,
         fxRateE6: 1_000_000,
+        fxAsOf: null,
+        fxStale: false,
         // Obligacje kupuje się w całości na jednym koncie, więc rozbicie ma
         // dokładnie jedną pozycję — ale musi tu być, żeby nie wypadły
         // z zestawienia kont jako „nieprzypisane".

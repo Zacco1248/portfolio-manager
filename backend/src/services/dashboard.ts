@@ -13,7 +13,14 @@ import { db } from '../db/index.js';
 import { instruments } from '../db/schema.js';
 import { addDays, today } from '../lib/dates.js';
 import { buildPositions, netInvested, realizedTotal } from './positions.js';
-import { detectConcentration, detectEtfOverlap, detectStalePrices, loadThresholds } from './risk.js';
+import {
+  detectConcentration,
+  detectEtfOverlap,
+  detectMissingPrices,
+  detectStaleFx,
+  detectStalePrices,
+  loadThresholds,
+} from './risk.js';
 import { readHistory, valueOn } from './snapshots.js';
 
 export function buildDashboard(portfolioIds: number[]): DashboardResponse {
@@ -124,8 +131,11 @@ function buildWarnings(positions: Position[]): RiskWarning[] {
   }
 
   return [
+    // Najpierw to, co psuje same liczby, potem to, co mówi o strukturze portfela.
+    ...detectStaleFx(positions),
+    ...detectMissingPrices(positions),
+    ...detectStalePrices(positions),
     ...detectConcentration(positions, thresholds),
     ...detectEtfOverlap(positions, holdingsMap, thresholds.overlapBp),
-    ...detectStalePrices(positions),
   ];
 }

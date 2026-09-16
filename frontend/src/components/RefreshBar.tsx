@@ -44,7 +44,7 @@ export function RefreshBar() {
   return (
     <div className="card flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5">
       <RefreshAction
-        label="Ceny"
+        label="Ceny i kursy"
         state={prices}
         onRun={() =>
           run(setPrices, async () => {
