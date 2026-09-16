@@ -17,7 +17,7 @@ export function Tax() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
-        <select className="input h-8 w-32 py-0" value={effectiveYear} onChange={(e) => setYear(Number(e.target.value))}>
+        <select className="input h-8 w-full sm:w-32 py-0" value={effectiveYear} onChange={(e) => setYear(Number(e.target.value))}>
           {(years.data ?? [effectiveYear]).map((y) => (
             <option key={y} value={y}>
               {y}
@@ -53,7 +53,7 @@ export function Tax() {
           </div>
 
           <Card title="Dywidendy i podatek u źródła">
-            <div className="grid grid-cols-3 gap-3 p-4 pt-2 text-sm">
+            <div className="grid grid-cols-1 gap-3 p-4 pt-2 text-sm sm:grid-cols-3">
               <Summary label="Brutto" value={formatPln(report.data.dividends.grossPlnMinor)} />
               <Summary label="Podatek u źródła" value={formatPln(report.data.dividends.withholdingTaxPlnMinor)} />
               <Summary label="Do dopłaty w PL" value={formatPln(report.data.dividends.duePlnMinor)} highlight />

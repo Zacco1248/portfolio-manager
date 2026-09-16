@@ -93,7 +93,7 @@ export function Positions() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-2">
         <input
-          className="input h-8 w-56"
+          className="input h-8 w-full sm:w-56"
           placeholder="Filtruj po tickerze lub nazwie…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -132,11 +132,28 @@ export function Positions() {
               <tr key={`${position.portfolioId}-${position.instrument.id}`} className="hover:bg-surface-overlay/50">
                 <td className="table-cell">
                   <Link to={`/instrument/${position.instrument.id}`} className="hover:text-accent">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <span className="font-medium">{position.instrument.symbol}</span>
-                      {position.priceStale && (
-                        <span className="badge bg-warn/15 text-warn" title="Cena może być nieaktualna">
-                          stara cena
+                      {position.priceMissing ? (
+                        <span
+                          className="badge bg-loss/15 text-loss"
+                          title="Brak notowania — wartość podstawiona kosztem nabycia"
+                        >
+                          brak notowania
+                        </span>
+                      ) : (
+                        position.priceStale && (
+                          <span className="badge bg-warn/15 text-warn" title="Cena może być nieaktualna">
+                            stara cena
+                          </span>
+                        )
+                      )}
+                      {position.fxStale && (
+                        <span
+                          className="badge bg-warn/15 text-warn"
+                          title={`Kurs ${position.instrument.currency} z ${position.fxAsOf ?? 'nieznanej daty'}`}
+                        >
+                          kurs z {position.fxAsOf?.slice(5).replace('-', '.') ?? '—'}
                         </span>
                       )}
                     </div>
@@ -157,8 +174,14 @@ export function Positions() {
                   {formatPln(position.costPlnMinor)}
                 </td>
                 <td className="table-cell tabular text-right font-medium">{formatPln(position.valuePlnMinor)}</td>
-                <td className={`table-cell tabular text-right ${toneClass(position.unrealizedPlnMinor)}`}>
-                  {formatPln(position.unrealizedPlnMinor, { sign: true })}
+                <td
+                  className={`table-cell tabular text-right ${
+                    position.priceMissing ? 'text-content-muted' : toneClass(position.unrealizedPlnMinor)
+                  }`}
+                >
+                  {/* Bez notowania wartość równa się kosztowi, więc zero byłoby
+                      informacją nieprawdziwą — pokazujemy brak danych. */}
+                  {position.priceMissing ? '—' : formatPln(position.unrealizedPlnMinor, { sign: true })}
                 </td>
                 <td className="table-cell text-right">
                   <PercentCell bp={position.unrealizedBp} />
@@ -195,7 +218,7 @@ export function Positions() {
         pozycja kupowana przy różnych kursach nie ma jednej ceny w walucie notowania.
       </p>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <button type="button" className="btn text-2xs" onClick={() => onSort('value')}>
           Sortuj: wartość
         </button>

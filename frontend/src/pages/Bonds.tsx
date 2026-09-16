@@ -227,17 +227,17 @@ export function Bonds() {
         <CpiCoverage entries={cpi.data ?? []} />
 
         <div className="flex flex-wrap items-end gap-2 p-4 pt-2">
-          <div className="w-24">
+          <div className="w-full sm:w-24">
             <Field label="Rok">
               <input className="input" value={cpiForm.year} onChange={(e) => setCpiForm({ ...cpiForm, year: e.target.value })} />
             </Field>
           </div>
-          <div className="w-24">
+          <div className="w-full sm:w-24">
             <Field label="Miesiąc">
               <input className="input" value={cpiForm.month} onChange={(e) => setCpiForm({ ...cpiForm, month: e.target.value })} />
             </Field>
           </div>
-          <div className="w-32">
+          <div className="w-full sm:w-32">
             <Field label="Inflacja r/r %">
               <input className="input" value={cpiForm.value} onChange={(e) => setCpiForm({ ...cpiForm, value: e.target.value })} placeholder="4,20" />
             </Field>

@@ -13,10 +13,22 @@ import {
   YAxis,
 } from 'recharts';
 import { ACCOUNT_KIND_LABELS, AI_DISCLAIMER } from '@portfolio/shared';
-import type { AllocationSlice, SnapshotPoint } from '@portfolio/shared';
+import type { AiUnavailable, AllocationSlice, SnapshotPoint } from '@portfolio/shared';
 import type { SessionFacts } from '@/lib/api';
 import { RefreshBar } from '@/components/RefreshBar';
-import { AiDisclaimer, AiPending, Card, DataTable, EmptyState, ErrorBanner, KpiTile, Spinner, WarningList } from '@/components/ui';
+import { useIsNarrow } from '@/lib/useMedia';
+import {
+  AiDisclaimer,
+  AiPending,
+  AiUnavailableNotice,
+  Card,
+  DataTable,
+  EmptyState,
+  ErrorBanner,
+  KpiTile,
+  Spinner,
+  WarningList,
+} from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatDate, formatPercent, formatPln, toneClass } from '@/lib/format';
 import { useAsync } from '@/lib/useAsync';
@@ -32,6 +44,9 @@ import { AXIS_TICK, TOOLTIP_STYLE, useAxisDensity } from '@/lib/chart';
 const SLICE_COLORS = ['#60a5fa', '#a78bfa', '#34d399', '#fbbf24', '#f87171', '#22d3ee', '#f472b6', '#94a3b8'];
 
 export function Dashboard() {
+  // Na wąskim ekranie kwoty idą w formie skróconej — pełna nie mieści się
+  // w kolumnie o szerokości pół telefonu.
+  const narrow = useIsNarrow();
   const portfolioId = usePortfolioParam();
   const { data, error, loading, reload } = useAsync(() => api.analytics.dashboard(portfolioId), [portfolioId]);
 
@@ -68,32 +83,39 @@ export function Dashboard() {
     <div className="space-y-4">
       <RefreshBar />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-5">
+      {/*
+        Pięć równych kafli w dwóch kolumnach dawało na telefonie ~175 px na
+        kwotę, w której siedmiocyfrowa wartość się łamała — a na tablecie
+        zostawiało piąty kafel samotnie w drugim rzędzie. Wartość portfela to
+        liczba, po którą sięga się pierwszą, więc dostaje własny wiersz.
+      */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <KpiTile
+          className="col-span-2 sm:col-span-1"
           label="Wartość portfela"
-          value={formatPln(summary.valuePlnMinor)}
+          value={formatPln(summary.valuePlnMinor, { compact: narrow })}
           change={summary.dayChangeBp}
           changeLabel="dziś"
         />
         <KpiTile
           label="Wynik całkowity"
-          value={formatPln(summary.totalReturnPlnMinor, { sign: true })}
+          value={formatPln(summary.totalReturnPlnMinor, { sign: true, compact: narrow })}
           change={summary.totalReturnBp}
           hint={`Wpłacono ${formatPln(summary.investedPlnMinor)}`}
         />
         <KpiTile
           label="Niezrealizowany"
-          value={formatPln(summary.unrealizedPlnMinor, { sign: true })}
+          value={formatPln(summary.unrealizedPlnMinor, { sign: true, compact: narrow })}
           hint={`${summary.positionsCount} pozycji`}
         />
         <KpiTile
           label="Zrealizowany"
-          value={formatPln(summary.realizedPlnMinor, { sign: true })}
+          value={formatPln(summary.realizedPlnMinor, { sign: true, compact: narrow })}
           hint="Suma zamkniętych transakcji"
         />
         <KpiTile
           label="Gotówka"
-          value={formatPln(summary.cashPlnMinor)}
+          value={formatPln(summary.cashPlnMinor, { compact: narrow })}
           change={summary.weekChangeBp}
           changeLabel="tydzień"
         />
@@ -138,16 +160,23 @@ export function Dashboard() {
         ) : (
           <ul className="divide-y divide-surface-border">
             {topMovers.map((mover) => (
-              <li key={mover.instrument.id} className="flex items-center justify-between gap-3 px-4 py-2">
-                <Link to={`/instrument/${mover.instrument.id}`} className="min-w-0 flex-1 hover:text-accent">
+              <li
+                key={mover.instrument.id}
+                className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 px-4 py-2"
+              >
+                <Link to={`/instrument/${mover.instrument.id}`} className="col-start-1 min-w-0 hover:text-accent">
                   <span className="text-sm font-medium">{mover.instrument.symbol}</span>
-                  <span className="ml-2 truncate text-2xs text-content-muted">{mover.instrument.name}</span>
+                  <span className="block truncate text-2xs text-content-muted">{mover.instrument.name}</span>
                 </Link>
-                <span className={`tabular text-sm ${toneClass(mover.dayChangeBp)}`}>
-                  {formatPercent(mover.dayChangeBp, { sign: true })}
-                </span>
-                <span className={`tabular w-24 text-right text-sm ${toneClass(mover.dayChangePlnMinor)}`}>
+                <span
+                  className={`tabular col-start-2 row-span-2 row-start-1 whitespace-nowrap text-right text-sm ${toneClass(
+                    mover.dayChangePlnMinor,
+                  )}`}
+                >
                   {formatPln(mover.dayChangePlnMinor ?? 0, { sign: true })}
+                  <span className={`block text-2xs ${toneClass(mover.dayChangeBp)}`}>
+                    {formatPercent(mover.dayChangeBp, { sign: true })}
+                  </span>
                 </span>
               </li>
             ))}
@@ -369,6 +398,8 @@ function ValueChart({ history }: { history: SnapshotPoint[] }) {
 }
 
 function AllocationChart({ slices, emptyHint }: { slices: AllocationSlice[]; emptyHint?: string }) {
+  const narrow = useIsNarrow();
+
   if (slices.length === 0) {
     return (
       <p className="px-4 pb-4 pt-2 text-sm text-content-muted">
@@ -406,6 +437,7 @@ function AllocationChart({ slices, emptyHint }: { slices: AllocationSlice[]; emp
   }));
 
   return (
+    <>
     <div className="chart-box px-2 pb-2 pt-3">
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
@@ -414,6 +446,14 @@ function AllocationChart({ slices, emptyHint }: { slices: AllocationSlice[]; emp
               <Cell key={index} fill={SLICE_COLORS[index % SLICE_COLORS.length]} stroke="none" />
             ))}
           </Pie>
+          {/*
+            Legenda Rechartsa ma sztywne 48 px wewnątrz pudełka o stałych
+            proporcjach. Osiem pozycji przy 11 px potrzebuje trzech wierszy,
+            dostaje jeden i się ucina, a pierścień traci wysokość, której
+            legenda i tak nie wykorzystuje. Na telefonie jej nie rysujemy —
+            zastępuje ją lista z paskami pod spodem, czytelniejsza i tak.
+          */}
+          {!narrow && (
           <Legend
             verticalAlign="bottom"
             height={48}
@@ -426,6 +466,7 @@ function AllocationChart({ slices, emptyHint }: { slices: AllocationSlice[]; emp
               );
             }}
           />
+          )}
           <Tooltip
             contentStyle={TOOLTIP_STYLE}
             formatter={(value: number) =>
@@ -435,6 +476,8 @@ function AllocationChart({ slices, emptyHint }: { slices: AllocationSlice[]; emp
         </PieChart>
       </ResponsiveContainer>
     </div>
+    {narrow && <AllocationList slices={visible} />}
+    </>
   );
 }
 
@@ -480,7 +523,9 @@ function SessionSummaryCard({ portfolioId }: { portfolioId: number | undefined }
     text: null,
     facts: null,
   });
+  /** Awaria transportu — model, który odmówił, ma osobny stan poniżej. */
   const [error, setError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState<AiUnavailable | null>(null);
 
   const feature = ai.data?.features.find((f) => f.key === 'sessionSummary');
   if (!feature?.available) return null;
@@ -488,13 +533,14 @@ function SessionSummaryCard({ portfolioId }: { portfolioId: number | undefined }
   const run = async () => {
     setState({ busy: true, text: null, facts: null });
     setError(null);
+    setUnavailable(null);
     try {
       const result = await api.assist.sessionSummary(portfolioId);
       // Funkcja bywa wyłączona mimo widocznego przycisku — stan mógł się
-      // zmienić w innej karcie przeglądarki.
-      if (result.unavailableReason) {
+      // zmienić w innej karcie przeglądarki. Fakty pokazujemy tak czy inaczej.
+      if (result.unavailable) {
         setState({ busy: false, text: null, facts: result.data });
-        setError(result.unavailableReason);
+        setUnavailable(result.unavailable);
         return;
       }
       setState({ busy: false, text: result.text, facts: result.data });
@@ -513,7 +559,7 @@ function SessionSummaryCard({ portfolioId }: { portfolioId: number | undefined }
         </button>
       }
     >
-      {!state.text && !state.busy && !error && (
+      {!state.text && !state.busy && !error && !unavailable && (
         <p className="px-4 pb-4 pt-2 text-2xs text-content-muted">
           Zbiera zmiany dzienne spółek z portfela i wiadomości z ostatnich 24 godzin, po czym opisuje, co
           poruszyło portfelem najbardziej.
@@ -522,6 +568,13 @@ function SessionSummaryCard({ portfolioId }: { portfolioId: number | undefined }
 
       {state.busy && <AiPending label="Zbieram dane z ostatniej doby…" />}
       {error && <ErrorBanner message={error} onRetry={() => void run()} />}
+      {unavailable && (
+        <AiUnavailableNotice
+          reason={unavailable}
+          onRetry={() => void run()}
+          note="Kafle poniżej powstają lokalnie i nie zależą od modelu."
+        />
+      )}
 
       {state.facts && (
         <div className="grid grid-cols-2 gap-3 px-4 pb-2 pt-2 sm:grid-cols-4">
